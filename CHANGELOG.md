@@ -2,9 +2,14 @@
 
 ## 0.3.2
 
+### Build 10
+
+- Side drawers and split panes keep their translucency through opening, closing, and resize transitions. Overlay drawers blur only the content behind them.
+- Tab switches avoid rebuilding the tab strip twice.
+
 ### Build 9
 
-- The full-width backdrop behind the composer follows the translucency setting. The composer and text stay opaque. Background updates are scoped to the visible page’s layout.
+- The full-width composer backdrop follows the translucency setting while the composer and text stay opaque. Background updates are scoped to the visible page’s layout.
 
 ### Build 8
 

@@ -2,6 +2,10 @@
 
 ## 0.3.2
 
+### Build 10 (local)
+
+- A WebKit fixture opens a drawer over a split layout, verifies the pane backgrounds and foreground opacity, then closes the drawer. The fixture repeats the streaming check after the drawer closes.
+
 ### Build 9 (local)
 
 - The panel regression covers the footer behind the composer, verifies that the composer stays opaque, and checks that streaming text does not trigger surface sampling.

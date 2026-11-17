@@ -576,9 +576,11 @@ final class FloatChatController: NSObject {
                 const previous = globalThis.floatChatCanvas;
                 previous?.stop();
                 const marker = 'data-floatchat-canvas';
+                const drawerMarker = 'data-floatchat-drawer';
                 const translucent = \#(translucent);
                 const root = document.documentElement;
                 let marked = previous?.surfaces ?? new Set();
+                let drawers = previous?.drawers ?? new Set();
                 let watched = new Set();
                 let pending = null;
                 const schedule = () => {
@@ -598,29 +600,55 @@ final class FloatChatController: NSObject {
                     if (document.body) roots.add(document.body);
                     const geometry = new Map();
                     const colors = new Map();
+                    const modalNavigation = new Map();
+                    const navigation = 'aside, nav, [role="navigation"], [role="complementary"]';
 
+                    const floatingPanes = new Set();
                     const sample = (y, sampleColor) => [0.08, 0.5, 0.92].map(position => {
+                        const x = Math.floor(innerWidth * position);
+                        const hits = translucent ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
+                        const visited = new Set();
                         let sampled = null;
-                        let node = document.elementFromPoint(Math.floor(innerWidth * position), y);
-                        while (node) {
-                            if (!geometry.has(node)) geometry.set(node, node.getBoundingClientRect());
-                            const size = geometry.get(node);
-                            const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
-                            const fullWidth = size.left <= 2 && size.right >= innerWidth - 2;
-                            const top = fullWidth && size.top <= 1 && size.bottom > 1 && size.height <= innerHeight * 0.25;
-                            const bottom = fullWidth && size.top < innerHeight - 2 && size.bottom >= innerHeight - 2
-                                && !node.matches('button, input, textarea, [contenteditable], [role="dialog"]');
-                            if (canvas || top || bottom) {
-                                surfaces.add(node);
-                                if (sampleColor && !sampled) {
-                                    if (!colors.has(node)) {
-                                        const color = getComputedStyle(node).backgroundColor;
-                                        colors.set(node, /^rgb\(/.test(color) ? color.match(/[0-9.]+/g)?.map(Number) : null);
+                        for (let node of hits) {
+                            while (node && !visited.has(node)) {
+                                visited.add(node);
+                                if (!geometry.has(node)) geometry.set(node, node.getBoundingClientRect());
+                                const size = geometry.get(node);
+                                const leftEdge = size.left <= 2;
+                                const rightEdge = size.right >= innerWidth - 2;
+                                const fullWidth = leftEdge && rightEdge;
+                                const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
+                                const pane = translucent && (leftEdge || rightEdge) && size.width >= innerWidth * 0.24
+                                    && size.width < innerWidth * 0.9 && size.height >= innerHeight * 0.65;
+                                const top = fullWidth && size.top <= 1 && size.bottom > 1 && size.height <= innerHeight * 0.25;
+                                const bottom = fullWidth && size.top < innerHeight - 2 && size.bottom >= innerHeight - 2;
+                                if ((canvas || pane || top || bottom) && !node.matches('button, input, textarea, [contenteditable]')) {
+                                    const modal = node.closest('dialog, [role="dialog"], [aria-modal="true"]');
+                                    if (modal) {
+                                        if (!modalNavigation.has(modal)) modalNavigation.set(modal, !!modal.querySelector(navigation));
+                                        if (!pane || !modalNavigation.get(modal)) {
+                                            node = node.parentElement;
+                                            continue;
+                                        }
                                     }
-                                    sampled = colors.get(node);
+                                    surfaces.add(node);
+                                    if (pane || (sampleColor && !sampled)) {
+                                        if (!colors.has(node)) {
+                                            const style = getComputedStyle(node);
+                                            const color = style.backgroundColor;
+                                            colors.set(node, {
+                                                rgb: /^rgb\(/.test(color) ? color.match(/[0-9.]+/g)?.map(Number) : null,
+                                                floating: (style.position === 'fixed' || style.position === 'absolute')
+                                                    && (node.matches(navigation) || !!node.querySelector(navigation))
+                                            });
+                                        }
+                                        const { rgb, floating } = colors.get(node);
+                                        if (pane && floating) floatingPanes.add(node);
+                                        if (sampleColor && !sampled) sampled = rgb;
+                                    }
                                 }
+                                node = node.parentElement;
                             }
-                            node = node.parentElement;
                         }
                         return sampled;
                     });
@@ -638,22 +666,39 @@ final class FloatChatController: NSObject {
                             for (let parent = node; parent && !roots.has(parent); parent = parent.parentElement) roots.add(parent);
                         }
                         marked = surfaces;
+                        const nextDrawers = new Set([...floatingPanes].filter(node => {
+                            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                                if (floatingPanes.has(parent)) return false;
+                            }
+                            return true;
+                        }));
+                        for (const node of drawers) {
+                            if (!nextDrawers.has(node)) node.removeAttribute(drawerMarker);
+                        }
+                        for (const node of nextDrawers) {
+                            if (!drawers.has(node)) node.setAttribute(drawerMarker, '');
+                        }
+                        drawers = nextDrawers;
                         if (!sheet && root) {
                             sheet = document.createElement('style');
                             sheet.id = 'floatchat-canvas';
-                            sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }';
+                            sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }'
+                                + '[data-floatchat-drawer] { backdrop-filter: blur(12px); }';
                             (document.head || root).append(sheet);
                         }
                         if (sheet?.sheet) sheet.sheet.disabled = false;
                         if (roots.size !== watched.size || [...roots].some(node => !watched.has(node))) {
                             observer.disconnect();
                             for (const node of roots) {
-                                if (node) observer.observe(node, { childList: true, attributes: true, attributeFilter: ['class', 'style'] });
+                                if (node) observer.observe(node, {
+                                    childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'data-state', 'aria-hidden']
+                                });
                             }
                             watched = roots;
                         }
                     } else {
                         for (const node of marked) node.removeAttribute(marker);
+                        for (const node of drawers) node.removeAttribute(drawerMarker);
                         sheet?.remove();
                     }
                     const consensus = entries => entries.find(color =>
@@ -663,12 +708,18 @@ final class FloatChatController: NSObject {
 
                 const color = update(true);
                 if (translucent) {
+                    const onTransition = event => {
+                        if (watched.has(event.target) && /^(transform|translate|width|left|right|opacity)$/.test(event.propertyName)) schedule();
+                    };
                     window.addEventListener('resize', schedule);
+                    document.addEventListener('transitionend', onTransition);
                     globalThis.floatChatCanvas = {
                         get surfaces() { return marked; },
+                        get drawers() { return drawers; },
                         stop() {
                             observer.disconnect();
                             window.removeEventListener('resize', schedule);
+                            document.removeEventListener('transitionend', onTransition);
                             if (pending !== null) clearTimeout(pending);
                         }
                     };
@@ -690,15 +741,17 @@ final class FloatChatController: NSObject {
     private func selectProvider(_ index: Int) {
         guard providers.indices.contains(index), !disabledURLs.contains(providers[index].key), index != selectedIndex else { return }
         rememberPinnedPage()
-        prunePages()
         parkActivePage()
         failureURL = nil
+        crashReloads.removeAll()
         selectedIndex = index
         preferences.set(providers[selectedIndex].key, forKey: "selectedProvider")
-        if panel?.isVisible == true { attachSelectedPage() }
-        crashReloads = []
-        refreshPicker()
-        prunePages()
+        if panel?.isVisible == true {
+            attachSelectedPage()
+        } else {
+            refreshPicker()
+            prunePages()
+        }
     }
 
     private func parkActivePage() {
@@ -2310,11 +2363,33 @@ extension FloatChatController {
             guard evaluate(replacement, in: original) == "done",
                   waitForValue(translucent, in: original, script: background) else { return false }
 
+            print("Checking a drawer over a split page")
+            let paneMarkup = """
+                <aside id="drawer" style="position:fixed;inset:0 auto 0 0;width:45%;background-color:rgb(30,40,50)">
+                    <button style="background-color:rgb(60,65,70)">New chat</button>
+                </aside>
+                <section id="mainPane" style="position:fixed;inset:0 0 0 45%;background-color:rgb(35,45,55)"></section>
+                """
+            let encodedPanes = String(decoding: try! JSONEncoder().encode(paneMarkup), as: UTF8.self)
+            let paneStyle = """
+                ['#drawer', '#mainPane', '#drawer button'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor)
+                    .concat(getComputedStyle(document.querySelector('#drawer button')).opacity,
+                            document.querySelector('#drawer').hasAttribute('data-floatchat-drawer'),
+                            document.querySelector('#mainPane').hasAttribute('data-floatchat-drawer')).join(':')
+                """
+            guard evaluate("document.body.insertAdjacentHTML('beforeend', \(encodedPanes)); 'done'", in: original) == "done",
+                  waitForValue("rgba(0, 0, 0, 0):rgba(0, 0, 0, 0):rgb(60, 65, 70):1:true:false", in: original, script: paneStyle)
+                  else { return false }
+            guard evaluate("document.querySelector('#drawer').remove(); document.querySelector('#mainPane').remove(); 'done'", in: original) == "done",
+                  waitForValue(translucent, in: original, script: background) else { return false }
+            // Let the coalesced layout update from closing the drawer finish before measuring streaming.
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.15))
+
             print("Checking that streaming text does not resample the page surfaces")
             let instrument = """
                 globalThis.fixtureSurfaceReads = 0;
-                const actualHitTest = document.elementFromPoint.bind(document);
-                document.elementFromPoint = (...args) => {
+                const actualHitTest = document.elementsFromPoint.bind(document);
+                document.elementsFromPoint = (...args) => {
                     globalThis.fixtureSurfaceReads++;
                     return actualHitTest(...args);
                 };
