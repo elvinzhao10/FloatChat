@@ -15,6 +15,8 @@ struct ChatSettingsView: View {
         let name: String
         let url: URL
         let pinned: Bool
+        let custom: Bool
+        let refreshingIcon: Bool
         let enabled: Bool
     }
     struct ShortcutControl: Identifiable {
@@ -30,6 +32,7 @@ struct ChatSettingsView: View {
     let setPinnedFirst: (Bool) -> Void
     let language: String
     let setLanguage: (String) -> Void
+    let refreshIcon: (URL) -> Void
     let clearWebsiteData: () -> Void
     let clearingWebsiteData: Bool
     let reloadPages: () -> Void
@@ -84,6 +87,14 @@ struct ChatSettingsView: View {
                 Text(provider.url.host ?? "").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
+            if provider.custom {
+                Button { refreshIcon(provider.url) } label: {
+                    Image(systemName: "arrow.clockwise")
+                }.buttonStyle(.plain)
+                    .disabled(provider.refreshingIcon)
+                    .help(AppText.t(provider.refreshingIcon ? "Refreshing Icon…" : "Refresh Icon"))
+                    .accessibilityLabel(AppText.t("Refresh Icon") + " " + provider.name)
+            }
             Toggle(provider.name, isOn: Binding(get: { provider.enabled }, set: { _ in toggle(provider.index) }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 .help(AppText.t("Show in the chat strip"))

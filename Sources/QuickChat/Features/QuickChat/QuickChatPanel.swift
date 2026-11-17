@@ -75,6 +75,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private var language: String { preferences.string(forKey: "appLanguage") ?? "en" }
     private var settingsWindow: NSWindow?
     private var clearingWebsiteData = false
+    private var refreshingIcons: Set<URL> = []
     private let settingsFields = ChatSettingsFields()
 
     var configureShortcut: (() -> Void)?
@@ -189,6 +190,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             },
             language: language,
             setLanguage: { [weak self] code in self?.setLanguage(code) },
+            refreshIcon: { [weak self] url in self?.refreshFavicon(url) },
             clearWebsiteData: { [weak self] in self?.confirmClearWebsiteData() },
             clearingWebsiteData: clearingWebsiteData,
             reloadPages: { [weak self] in self?.reloadForLanguage() },
@@ -200,7 +202,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             remove: { [weak self] index in self?.removeProvider(index) },
             unpin: { [weak self] index in self?.unpinProvider(index) },
             providers: providers.enumerated().map { index, provider in
-                ChatSettingsView.Row(id: provider.key, index: index, name: displayName(provider), url: provider.url, pinned: provider.isPinned, enabled: !disabledURLs.contains(provider.key))
+                ChatSettingsView.Row(id: provider.key, index: index, name: displayName(provider), url: provider.url, pinned: provider.isPinned, custom: provider.sessionID == nil && customProviders.contains(where: { $0.url == provider.url }), refreshingIcon: refreshingIcons.contains(provider.url), enabled: !disabledURLs.contains(provider.key))
             }, toggle: { [weak self] in self?.toggleProvider($0) },
             add: { [weak self] name, address in
                 self?.addWebsite(name, address: address) ?? false
@@ -285,7 +287,22 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         parkedPages.removeAll(); visitedURLs.removeAll(); prunePages()
         if let webView { webView.load(pageRequest(webView.url ?? chatURL)) }
     }
-    private func addWebsite(_ name: String, address: String) -> Bool {
+    private func refreshFavicon(_ url: URL) {
+        guard refreshingIcons.insert(url).inserted else { return }
+        updateSettings()
+        Task { [weak self] in
+            let png = await WebsiteFavicon.fetch(for: url)
+            guard let self else { return }
+            self.refreshingIcons.remove(url)
+            if let png, self.customProviders.contains(where: { $0.url == url }) {
+                ProviderIcon.store(png, for: url)
+                self.refreshPicker()
+            }
+            self.updateSettings()
+        }
+    }
+
+    private func addWebsite(_ name: String, address: String, fetchIcon: Bool = true) -> Bool {
         guard let url = ProviderAddress.parse(address), !providers.contains(where: { $0.sessionID == nil && $0.url == url }), !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         let selected = providers[selectedIndex].key
         deletedURLs.remove(url.absoluteString)
@@ -295,6 +312,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         preferences.set(Array(disabledURLs), forKey: "disabledProviders")
         selectedIndex = providers.firstIndex(where: { $0.key == selected }) ?? 0
         saveCustomProviders(); refreshPicker(); updateSettings()
+        if fetchIcon, customProviders.contains(where: { $0.url == url }) { refreshFavicon(url) }
         return true
     }
     @objc private func openInBrowser(_ sender: Any?) {
@@ -1399,7 +1417,7 @@ extension QuickChatController {
         guard controller.chatURL == selected, controller.providers[2].url == selected else { return false }
         let restored = QuickChatController(preferences: defaults)
         guard restored.providers[2].url == selected else { return false }
-        guard controller.addWebsite("Example", address: "EXAMPLE.com"),
+        guard controller.addWebsite("Example", address: "EXAMPLE.com", fetchIcon: false),
               !controller.addWebsite("Duplicate", address: "https://example.com:443/"),
               !controller.addWebsite("Unsafe", address: "http://example.net/"),
               !controller.addWebsite("Credentials", address: "https://user:secret@example.net/") else { return false }

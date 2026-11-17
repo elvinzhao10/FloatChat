@@ -26,6 +26,7 @@ enum AppText {
         return text
     }
     private static let chinese: [String: String] = [
+        "Refresh Icon": "刷新图标", "Refreshing Icon…": "正在刷新图标…",
         "Privacy": "隐私", "Clear All Website Sign-ins…": "清除所有网站登录…",
         "Clear all website data?": "清除所有网站数据？",
         "Clear Website Data": "清除网站数据", "Clearing website data…": "正在清除网站数据…",

@@ -7,4 +7,4 @@ Provider favicons are bundled from their official websites for identification on
 - Gemini: www.gstatic.com/lamda/images/gemini_sparkle_aurora_33f86dc0c0257da337c63.svg
 - Perplexity: www.perplexity.ai/favicon.ico
 - Copilot: copilot.microsoft.com/favicon.ico
-- Grok: x.ai/favicon.ico
+- Grok: grok.com/images/android-chrome-192x192.png (declared by grok.com)

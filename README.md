@@ -47,9 +47,15 @@ The community build uses an ad-hoc signature. Apple notarization is unavailable 
 
 ### Small by design
 
-Native Swift, AppKit and WebKit. No Electron runtime, icon-service requests, analytics, or background polling. At most three inactive pages are retained; older pages are released. Choose **Release Immediately** for the lowest retained memory use. Provider websites still consume their own resources, and macOS can reclaim pages under pressure.
+Native Swift, AppKit and WebKit. No Electron runtime, analytics, or background polling. Omni fetches custom icons from the website itself when you add it or choose **Refresh Icon** in **Settings → Chats**. Icon requests use HTTPS and a separate session without your website cookies. Sites without a usable icon get a globe. At most three inactive pages are retained; older pages are released. Choose **Release Immediately** for the lowest retained memory use. Provider websites still consume their own resources, and macOS can reclaim pages under pressure.
 
 Sign in directly on each website. Omni does not import your browser's cookies or collect passwords. Removing a website or tab only removes it from the list; your account and sign-in data are kept. Use **Settings → General → Privacy → Clear All Website Sign-ins…** to remove Omni’s local website data before uninstalling. Turning a website off preserves its login. Dragging the app to Trash leaves its website data on the Mac. Some providers restrict embedded sign-ins or uploads; use **Continue in Browser** if a particular flow is unsupported.
+
+### Remove website data after uninstalling
+
+If you already deleted Omni, reinstall it from the official release and choose **Settings → General → Privacy → Clear All Website Sign-ins…**. Confirm the reset, wait for it to finish, then quit and remove the app again. The reset clears Omni’s website storage and signs out its embedded sessions. Your default browser’s sessions are separate.
+
+If you prefer Finder cleanup, quit any running copy. Press **⇧⌘G** and open `~/Library/WebKit`, then move only the `dev.quickchat.omni` folder to Trash if present. Repeat in `~/Library/HTTPStorages` and `~/Library/Caches` for the same exact folder name. macOS can place website data differently across versions. The in-app reset is the reliable route if you need to clear every Omni login.
 
 <details>
 <summary>Build and verification</summary>
