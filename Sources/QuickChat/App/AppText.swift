@@ -26,6 +26,10 @@ enum AppText {
         return text
     }
     private static let chinese: [String: String] = [
+        "Privacy": "隐私", "Clear All Website Sign-ins…": "清除所有网站登录…",
+        "Clear all website data?": "清除所有网站数据？",
+        "Clear Website Data": "清除网站数据", "Clearing website data…": "正在清除网站数据…",
+        "This signs out every website in Omni and discards open drafts. Your website list and pinned links are kept.": "这会退出 Omni 中所有网站的登录并丢弃打开的草稿。网站列表和固定链接将保留。",
         "Chats": "聊天", "General": "通用", "Switch Chat": "切换聊天",
         "Web Pages": "网页", "Shortcuts": "快捷键",
         "Chats & Websites": "聊天与网站", "Your space for quick chats": "你的快捷聊天空间",

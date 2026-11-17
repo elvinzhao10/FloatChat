@@ -51,7 +51,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             savedSessions = stored.filter { item in
                 guard item.sessionID != nil, item.isPinned, ProviderAddress.parse(item.url.absoluteString) != nil, seen.insert(item.key).inserted else { return false }
                 guard let target = item.conversationURL else { return false }
-                return ProviderAddress.parse(target.absoluteString) != nil && ProviderAddress.matchesWebsite(host: target.host, baseHost: item.url.host) && target.user == nil && target.password == nil
+                return Self.isConversationURL(target, provider: item)
             }
         }
         deletedURLs = Set(preferences.stringArray(forKey: "deletedProviders") ?? [])
@@ -74,6 +74,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private var pinnedFirst: Bool { preferences.bool(forKey: "pinnedFirst") }
     private var language: String { preferences.string(forKey: "appLanguage") ?? "en" }
     private var settingsWindow: NSWindow?
+    private var clearingWebsiteData = false
     private let settingsFields = ChatSettingsFields()
 
     var configureShortcut: (() -> Void)?
@@ -188,6 +189,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             },
             language: language,
             setLanguage: { [weak self] code in self?.setLanguage(code) },
+            clearWebsiteData: { [weak self] in self?.confirmClearWebsiteData() },
+            clearingWebsiteData: clearingWebsiteData,
             reloadPages: { [weak self] in self?.reloadForLanguage() },
             retention: retentionMinutes,
             setRetention: { [weak self] minutes in self?.retentionMinutes = minutes; self?.prunePages(); self?.updateSettings() },
@@ -206,6 +209,26 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             host.rootView = view
         } else {
             settingsWindow.contentView = NSHostingView(rootView: view)
+        }
+    }
+    private func confirmClearWebsiteData() {
+        guard !clearingWebsiteData, let settingsWindow else { return }
+        let alert = NSAlert()
+        alert.messageText = AppText.t("Clear all website data?")
+        alert.informativeText = AppText.t("This signs out every website in Omni and discards open drafts. Your website list and pinned links are kept.")
+        alert.addButton(withTitle: AppText.t("Cancel"))
+        alert.addButton(withTitle: AppText.t("Clear Website Data")).hasDestructiveAction = true
+        alert.beginSheetModal(for: settingsWindow) { [weak self] response in
+            guard response == .alertSecondButtonReturn, let self else { return }
+            self.clearingWebsiteData = true
+            self.tearDown()
+            self.visitedURLs.removeAll()
+            self.updateSettings()
+            WKWebsiteDataStore.default().removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+                                                    modifiedSince: .distantPast) { [weak self] in
+                self?.clearingWebsiteData = false
+                self?.updateSettings()
+            }
         }
     }
     private func setLanguage(_ code: String) {
@@ -505,7 +528,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
     }
     private func canRemember(_ url: URL, provider: Provider) -> Bool {
-        guard url.scheme == "https", isProviderHost(url.host, provider: provider) else { return false }
+        Self.isConversationURL(url, provider: provider)
+    }
+    private static func isConversationURL(_ url: URL, provider: Provider) -> Bool {
+        guard url.scheme == "https", url.user == nil, url.password == nil,
+              ProviderAddress.matchesWebsite(host: url.host, baseHost: provider.url.host) else { return false }
         let parts = Set(url.path.lowercased().split(separator: "/").map(String.init))
         let sensitiveQuery = Set((URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { $0.name.lowercased() })
         return parts.isDisjoint(with: ["login", "signin", "sign-in", "sign_in", "signup", "sign-up", "sign_up", "auth", "oauth", "oauth2", "logout"])
@@ -519,8 +546,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard provider.isPinned, let index = savedSessions.firstIndex(where: { $0.key == provider.key }),
               let url = webView?.url, canRemember(url, provider: provider) else { return }
         let title = String(topicOnly(webView?.title, provider: provider).prefix(100))
-        if savedSessions[index].conversationURL != url || savedSessions[index].topic != title {
-            savedSessions[index].conversationURL = url
+        if savedSessions[index].conversationURL == url, savedSessions[index].topic != title {
             savedSessions[index].topic = title
             saveSessions()
         }
@@ -624,6 +650,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        guard !clearingWebsiteData else { return }
         settingsWindow?.orderOut(nil)
         let panel = self.panel ?? makePanel()
         let front = NSWorkspace.shared.frontmostApplication
@@ -712,7 +739,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     /// Closes the panel and releases the web view (the sign-in session stays in the data store).
     func tearDown() {
         panel?.orderOut(nil)
-        webView?.stopLoading()
+        if let webView { releasePage(webView) }
         panel?.contentView = nil
         panel = nil
         webView = nil
@@ -974,6 +1001,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     /// Responses the web view can't display, or that the server marks as attachments, are saved.
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        guard webView === self.webView else { decisionHandler(.cancel); return }
         let disposition = (navigationResponse.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased()
         let isAttachment = disposition?.hasPrefix("attachment") == true

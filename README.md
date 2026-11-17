@@ -40,13 +40,15 @@ Quick Chat Omni brings the chat websites you already use into a small, movable m
 
 The ZIP contains the same ready-built app if you prefer to unzip it. Both packages support Apple silicon and Intel Macs running macOS 14 or later.
 
-**First launch:** this community release is locally signed but **not Apple-notarized**. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway** after attempting to launch. Only approve a download from this repository's release page.
+The community build uses an ad-hoc signature. Apple notarization is unavailable for this build. If macOS blocks the first launch, confirm you downloaded it from this repository’s release page, then go to **System Settings → Privacy & Security → Open Anyway**. Confirm the prompt and open the app. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
+
+<p align="center"><img src="docs/images/menu-bar.png" width="160" alt="Menu bar icon rendered on light and dark backgrounds"></p>
 
 ### Small by design
 
 Native Swift, AppKit and WebKit. No Electron runtime, icon-service requests, analytics, or background polling. At most three inactive pages are retained; older pages are released. Choose **Release Immediately** for the lowest retained memory use. Provider websites still consume their own resources, and macOS can reclaim pages under pressure.
 
-Sign in directly on each website. Omni does not import your browser's cookies or collect passwords. Removing a website or tab only removes it from the list; your account and sign-in data are kept. Sign out from the website itself when needed. Some providers restrict embedded sign-ins or uploads; use **Continue in Browser** if a particular flow is unsupported.
+Sign in directly on each website. Omni does not import your browser's cookies or collect passwords. Removing a website or tab only removes it from the list; your account and sign-in data are kept. Use **Settings → General → Privacy → Clear All Website Sign-ins…** to remove Omni’s local website data before uninstalling. Turning a website off preserves its login. Dragging the app to Trash leaves its website data on the Mac. Some providers restrict embedded sign-ins or uploads; use **Continue in Browser** if a particular flow is unsupported.
 
 <details>
 <summary>Build and verification</summary>

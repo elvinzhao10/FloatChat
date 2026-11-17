@@ -30,6 +30,8 @@ struct ChatSettingsView: View {
     let setPinnedFirst: (Bool) -> Void
     let language: String
     let setLanguage: (String) -> Void
+    let clearWebsiteData: () -> Void
+    let clearingWebsiteData: Bool
     let reloadPages: () -> Void
     let retention: Int
     let setRetention: (Int) -> Void
@@ -157,6 +159,11 @@ struct ChatSettingsView: View {
                     }
                 }
                 Button(AppText.t("Keyboard Shortcuts…"), action: shortcuts)
+            }
+            Section(AppText.t("Privacy")) {
+                Button(AppText.t(clearingWebsiteData ? "Clearing website data…" : "Clear All Website Sign-ins…"),
+                       action: clearWebsiteData)
+                    .disabled(clearingWebsiteData)
             }
         }.formStyle(.grouped)
     }

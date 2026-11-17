@@ -5,9 +5,9 @@ Reviewed November 17, 2026. This is a source review and functional verification,
 ## Verified
 
 - Provider addresses are canonical HTTPS URLs. Embedded credentials, HTTP URLs and duplicate addresses are rejected. Stored custom addresses are revalidated when loaded.
-- Each website has one instant slot; pinned conversations have independent identities. Pinned URLs are serialized and restored. Unpinning closes the saved tab and returns to an existing instant page without replacing it. There is no separate add-tab control. Session tabs share website cookies, rather than acting as separate account profiles.
+- Each website has one instant slot; pinned conversations have independent identities. Pinned URLs are serialized, revalidated on launch, and stay fixed as the user navigates. Unpinning closes the saved tab and returns to an existing instant page without replacing it. There is no separate add-tab control. Session tabs share website cookies, rather than acting as separate account profiles.
 - Provider ordering survives relaunch. Removing or hiding the active provider selects a valid replacement. At least one website remains available.
-- Removing a website preserves website storage and account data. The global website-data wipe action has been removed from the interface and implementation.
+- Removing a website preserves website storage and account data. The app offers a confirmed website-data reset in Settings → General → Privacy. Reset closes the active and retained web views and blocks reopening until WebKit completes the clear.
 - Draft preservation was observed across a ChatGPT → Claude → ChatGPT switch. Automated checks cover oldest-first eviction, the three-inactive-page cap, expiry and immediate release, independent session keys, pinned URL restoration and unpinning. Expiring an instant page clears its remembered in-memory URL; pinned descriptors remain.
 - Inactive pages cannot open upload dialogs or request media permissions. Switching away or hiding the panel stops camera/microphone capture and suspends media playback. Capture is not automatically restarted.
 - Navigation rejects non-HTTPS/local protocol schemes. Generated blob/data exports use WebKit's download flow. TLS verification is left to WebKit; no certificate bypass, injected credential bridge or browser-cookie import is implemented.

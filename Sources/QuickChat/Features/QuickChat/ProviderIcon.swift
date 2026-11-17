@@ -20,7 +20,17 @@ enum ProviderIcon {
             let development = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/Providers/\(key).png")
             image = resource.flatMap { NSImage(contentsOf: $0) } ?? NSImage(contentsOf: development)
         }
-        let result = image ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "Website")!
+        let result: NSImage
+        if let image, key != "chatgpt" {
+            let bounds = NSRect(x: 0, y: 0, width: size, height: size)
+            result = NSImage(size: bounds.size, flipped: false) { _ in
+                NSBezierPath(roundedRect: bounds, xRadius: size * 0.22, yRadius: size * 0.22).addClip()
+                image.draw(in: bounds)
+                return true
+            }
+        } else {
+            result = image ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "Website")!
+        }
         if key == "chatgpt" { result.isTemplate = true }
         result.size = NSSize(width: size, height: size)
         images[cacheKey] = result
