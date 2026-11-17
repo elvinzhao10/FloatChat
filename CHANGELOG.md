@@ -2,6 +2,11 @@
 
 ## 0.3.2
 
+### Build 11
+
+- Chat switches update existing tab buttons. Writing suggestions are configured on focus, without observing the message stream.
+- Route and theme callbacks share a single pending appearance update. Overlay drawers use a translucent tint without page-level blur.
+
 ### Build 10
 
 - Side drawers and split panes keep their translucency through opening, closing, and resize transitions. Overlay drawers blur only the content behind them.

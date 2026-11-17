@@ -2,6 +2,10 @@
 
 ## 0.3.2
 
+### Build 11 (local)
+
+- The native panel test covers typing after tab switches, writing-suggestion settings on focus, translucent drawer tint without a WebKit backdrop filter, and zero surface scans during simulated streaming. All five local suites passed.
+
 ### Build 10 (local)
 
 - A WebKit fixture opens a drawer over a split layout, verifies the pane backgrounds and foreground opacity, then closes the drawer. The fixture repeats the streaming check after the drawer closes.

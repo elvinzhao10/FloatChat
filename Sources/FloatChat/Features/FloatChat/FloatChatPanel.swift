@@ -94,7 +94,10 @@ final class FloatChatController: NSObject {
         preferences.set(value, forKey: "panelTranslucency")
         settingsFields.panelTranslucency = panelTranslucency
         applySurfaceAppearance()
-        if wasTranslucent != (panelTranslucency > 0), let webView { matchPageEdge(webView) }
+        if wasTranslucent != (panelTranslucency > 0), let webView {
+            cancelPageAppearance()
+            matchPageEdge(webView)
+        }
     }
 
     private func applySurfaceAppearance() {
@@ -528,7 +531,7 @@ final class FloatChatController: NSObject {
                 guard let self, self.webView === view else { return }
                 self.rememberPinnedPage()
                 self.updateWebsiteIdentity()
-                self.matchPageEdge(view)
+                self.requestPageAppearance(for: view)
             }
         }
         pageTitleObservation = view.observe(\.title, options: [.new]) { [weak self] view, _ in
@@ -550,10 +553,29 @@ final class FloatChatController: NSObject {
            panelTranslucency == 0 || color.alphaComponent == 1 {
             setSurfaceColor(color)
         }
-        matchPageEdge(webView)
+        requestPageAppearance(for: webView)
+    }
+
+    private var pageAppearanceTimer: Timer?
+
+    private func requestPageAppearance(for view: WKWebView) {
+        guard view === webView, pageAppearanceTimer == nil else { return }
+        pageAppearanceTimer = Timer.scheduledTimer(withTimeInterval: 0.035, repeats: false) { [weak self, weak view] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pageAppearanceTimer = nil
+                if let view { self.matchPageEdge(view) }
+            }
+        }
+    }
+
+    private func cancelPageAppearance() {
+        pageAppearanceTimer?.invalidate()
+        pageAppearanceTimer = nil
     }
 
     private func setSurfaceColor(_ color: NSColor) {
+        guard surfaceColor != color else { return }
         surfaceColor = color
         applySurfaceAppearance()
         if let rgb = color.usingColorSpace(.sRGB) {
@@ -581,6 +603,7 @@ final class FloatChatController: NSObject {
                 const root = document.documentElement;
                 let marked = previous?.surfaces ?? new Set();
                 let drawers = previous?.drawers ?? new Set();
+                let drawerTint = previous?.tint ?? '32, 32, 32';
                 let watched = new Set();
                 let pending = null;
                 const schedule = () => {
@@ -653,6 +676,8 @@ final class FloatChatController: NSObject {
                         return sampled;
                     });
 
+                    const consensus = entries => entries.find(color =>
+                        color && entries.filter(other => String(other) === String(color)).length > 1);
                     const top = sample(1, readColor);
                     const middle = translucent ? sample(Math.floor(innerHeight * 0.42), readColor) : [];
                     if (translucent) {
@@ -682,9 +707,14 @@ final class FloatChatController: NSObject {
                         if (!sheet && root) {
                             sheet = document.createElement('style');
                             sheet.id = 'floatchat-canvas';
-                            sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }'
-                                + '[data-floatchat-drawer] { backdrop-filter: blur(12px); }';
                             (document.head || root).append(sheet);
+                        }
+                        if (sheet && (readColor || !sheet.textContent)) {
+                            const color = consensus(middle) ?? consensus(top);
+                            if (color) drawerTint = color.join(', ');
+                            const rules = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }'
+                                + '[data-floatchat-drawer] { background-color: rgba(' + drawerTint + ', 0.94) !important; }';
+                            if (sheet.textContent !== rules) sheet.textContent = rules;
                         }
                         if (sheet?.sheet) sheet.sheet.disabled = false;
                         if (roots.size !== watched.size || [...roots].some(node => !watched.has(node))) {
@@ -701,8 +731,6 @@ final class FloatChatController: NSObject {
                         for (const node of drawers) node.removeAttribute(drawerMarker);
                         sheet?.remove();
                     }
-                    const consensus = entries => entries.find(color =>
-                        color && entries.filter(other => String(other) === String(color)).length > 1);
                     return consensus(middle) ?? consensus(top) ?? null;
                 };
 
@@ -716,6 +744,7 @@ final class FloatChatController: NSObject {
                     globalThis.floatChatCanvas = {
                         get surfaces() { return marked; },
                         get drawers() { return drawers; },
+                        get tint() { return drawerTint; },
                         stop() {
                             observer.disconnect();
                             window.removeEventListener('resize', schedule);
@@ -749,7 +778,7 @@ final class FloatChatController: NSObject {
         if panel?.isVisible == true {
             attachSelectedPage()
         } else {
-            refreshPicker()
+            updateTabSelection()
             prunePages()
         }
     }
@@ -757,6 +786,7 @@ final class FloatChatController: NSObject {
     private func parkActivePage() {
         guard let view = webView else { return }
         let provider = providers[selectedIndex]
+        cancelPageAppearance()
         stopTrackingPageLoad()
         if panelTranslucency > 0 {
             view.evaluateJavaScript("globalThis.floatChatCanvas?.stop()", in: nil, in: .defaultClient, completionHandler: nil)
@@ -786,7 +816,7 @@ final class FloatChatController: NSObject {
         contentStack.addArrangedSubview(view)
         if let resizeGrip { contentStack.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
         observePageColor(view)
-        refreshPicker()
+        updateTabSelection()
         updateWebsiteIdentity()
         updateStatus()
         if cached == nil { view.load(pageRequest(chatURL)) }
@@ -840,23 +870,42 @@ final class FloatChatController: NSObject {
             for child in document.arrangedSubviews { document.removeArrangedSubview(child); child.removeFromSuperview() }
             for child in pinnedFirst ? [group, instant] : [instant, group] { document.addArrangedSubview(child) }
         }
-        pinButton?.image = NSImage(systemSymbolName: providers[selectedIndex].isPinned ? "pin.fill" : "pin", accessibilityDescription: "Pin Conversation")
-        pinButton?.isEnabled = providers[selectedIndex].isPinned || webView?.url.map { canRemember($0, provider: providers[selectedIndex]) } == true
-        pinButton?.toolTip = AppText.t(providers[selectedIndex].isPinned ? "Unpin and close this chat" : "Pin this conversation")
-        pinButton?.setAccessibilityLabel(pinButton?.toolTip)
         if let document = providerTabs?.superview as? NSStackView {
             document.layoutSubtreeIfNeeded()
             document.setFrameSize(NSSize(width: document.fittingSize.width, height: 28))
         }
-        let selectedKey = providers[selectedIndex].key
+        updateTabSelection()
+    }
+
+    private func updateTabSelection() {
+        let provider = providers[selectedIndex]
+        let tabs = (providerTabs?.arrangedSubviews ?? []) + (pinnedTabs?.arrangedSubviews ?? [])
+        for case let button as ChatTabButton in tabs {
+            let selected = button.tabKey == provider.key
+            let state: NSControl.StateValue = selected ? .on : .off
+            if button.state != state {
+                button.state = state
+                button.needsDisplay = true
+            }
+        }
+        updateTabPreviews()
+        let selectedKey = provider.key
         DispatchQueue.main.async { [weak self] in
             guard let self, self.providers[self.selectedIndex].key == selectedKey else { return }
-            self.providerTabs?.superview?.layoutSubtreeIfNeeded()
-            for case let button as ChatTabButton in (self.providerTabs?.arrangedSubviews ?? []) + (self.pinnedTabs?.arrangedSubviews ?? []) where button.tabKey == selectedKey {
+            for case let button as ChatTabButton in (self.providerTabs?.arrangedSubviews ?? []) + (self.pinnedTabs?.arrangedSubviews ?? [])
+                where button.tabKey == selectedKey {
                 button.scrollToVisible(button.bounds)
             }
         }
     }
+
+    private func updatePinButton() {
+        pinButton?.image = NSImage(systemSymbolName: providers[selectedIndex].isPinned ? "pin.fill" : "pin", accessibilityDescription: "Pin Conversation")
+        pinButton?.isEnabled = providers[selectedIndex].isPinned || webView?.url.map { canRemember($0, provider: providers[selectedIndex]) } == true
+        pinButton?.toolTip = AppText.t(providers[selectedIndex].isPinned ? "Unpin and close this chat" : "Pin this conversation")
+        pinButton?.setAccessibilityLabel(pinButton?.toolTip)
+    }
+
     private func populateTabs(_ row: NSStackView, indices: [Int]) {
         for index in indices {
             let provider = providers[index]
@@ -1016,9 +1065,13 @@ final class FloatChatController: NSObject {
         return title
     }
     private func updateTabPreviews() {
-        for case let button as ChatTabButton in (providerTabs?.arrangedSubviews ?? []) + (pinnedTabs?.arrangedSubviews ?? []) {
-            if let provider = providers.first(where: { $0.key == button.tabKey }) { button.toolTip = preview(for: provider) }
+        let provider = providers[selectedIndex]
+        let tabs = (providerTabs?.arrangedSubviews ?? []) + (pinnedTabs?.arrangedSubviews ?? [])
+        for case let button as ChatTabButton in tabs where button.tabKey == provider.key {
+            button.toolTip = preview(for: provider)
+            button.setAccessibilityLabel(provider.isPinned ? displayName(provider) : provider.name)
         }
+        updatePinButton()
     }
     private func canRemember(_ url: URL, provider: Provider) -> Bool {
         Self.isConversationURL(url, provider: provider)
@@ -1074,6 +1127,7 @@ final class FloatChatController: NSObject {
             }
             // Unpin closes the saved tab. It never replaces or discards an existing instant page.
             if let view = webView {
+                cancelPageAppearance()
                 panel?.detachKeyboardFromPage(view)
                 contentStack?.removeArrangedSubview(view)
                 view.removeFromSuperview()
@@ -1277,6 +1331,7 @@ final class FloatChatController: NSObject {
 
     /// Closes the panel and releases the web view (the sign-in session stays in the data store).
     func tearDown() {
+        cancelPageAppearance()
         stopTrackingPageLoad()
         connectivity?.cancel()
         connectivity = nil
@@ -1298,6 +1353,7 @@ final class FloatChatController: NSObject {
         for page in parkedPages.values { releasePage(page.view) }
         parkedPages.removeAll()
         chromeView = nil
+        surfaceColor = .windowBackgroundColor
         pageColorObservation = nil
         pageURLObservation = nil
         pageTitleObservation = nil
@@ -1603,26 +1659,20 @@ final class FloatChatController: NSObject {
         return webView
     }
 
-    /// Turns off macOS autocorrect / auto-capitalization (and inline predictions) in chatgpt.com's
-    /// composer. Their suggestion bubble swallows keys while it's up, ⌥Space included, so the
-    /// toggle shortcut stops working. Spell-check underlines stay. Re-applied on DOM changes,
-    /// since the page re-renders the composer.
+    /// Disable native writing suggestions when an editable field gains focus.
+    /// The suggestion bubble can intercept the panel shortcut. Spell-check underlines stay.
     private static let noAutocorrectScript = """
     (() => {
       const selector = '#prompt-textarea, [contenteditable="true"], textarea';
-      const apply = el => {
-        el.setAttribute('autocorrect', 'off');
-        el.setAttribute('autocapitalize', 'off');
-        el.setAttribute('writingsuggestions', 'false');
+      const apply = target => {
+        const field = target instanceof Element ? target.closest(selector) : null;
+        if (!field) return;
+        field.setAttribute('autocorrect', 'off');
+        field.setAttribute('autocapitalize', 'off');
+        field.setAttribute('writingsuggestions', 'false');
       };
-      const scan = node => {
-        if (node.nodeType !== 1) return;
-        if (node.matches(selector)) apply(node);
-        node.querySelectorAll(selector).forEach(apply);
-      };
-      new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(scan)))
-        .observe(document, { childList: true, subtree: true });
-      document.querySelectorAll(selector).forEach(apply);
+      document.addEventListener('focusin', event => apply(event.target), true);
+      document.addEventListener('DOMContentLoaded', () => apply(document.activeElement), { once: true });
     })();
     """
 
@@ -1765,10 +1815,10 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         stopTrackingPageLoad()
         updateStatus()
         updateWebsiteIdentity()
-        matchPageEdge(webView)
+        requestPageAppearance(for: webView)
         if panel?.isKeyWindow == true { focusSelectedPage() }
         rememberPinnedPage()
-        refreshPicker()
+        updateTabPreviews()
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -2268,6 +2318,7 @@ extension FloatChatController {
         print("Checking WebKit setup")
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        controller.configureScripts(config.userContentController)
         let original = WKWebView(frame: .zero, configuration: config)
         let alternate = WKWebView(frame: .zero, configuration: config)
         defaults.set(true, forKey: "glassEnabled")
@@ -2323,6 +2374,12 @@ extension FloatChatController {
             return false
         }
         controller.focusSelectedPage()
+        let writingPreferences = """
+            const field = document.querySelector('#draft');
+            field.focus();
+            ['autocorrect', 'autocapitalize', 'writingsuggestions'].map(name => field.getAttribute(name)).join(':')
+            """
+        guard waitForValue("off:off:false", in: original, script: writingPreferences) else { return false }
         guard evaluate("document.querySelector('#draft').value = '测试草稿'", in: original) == "测试草稿" else { return false }
         controller.selectProvider(1)
         guard controller.webView === alternate,
@@ -2372,13 +2429,15 @@ extension FloatChatController {
                 """
             let encodedPanes = String(decoding: try! JSONEncoder().encode(paneMarkup), as: UTF8.self)
             let paneStyle = """
-                ['#drawer', '#mainPane', '#drawer button'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor)
-                    .concat(getComputedStyle(document.querySelector('#drawer button')).opacity,
+                [getComputedStyle(document.querySelector('#drawer')).backgroundColor.endsWith(', 0.94)'),
+                    getComputedStyle(document.querySelector('#drawer')).backdropFilter]
+                    .concat(['#mainPane', '#drawer button'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor),
+                            getComputedStyle(document.querySelector('#drawer button')).opacity,
                             document.querySelector('#drawer').hasAttribute('data-floatchat-drawer'),
                             document.querySelector('#mainPane').hasAttribute('data-floatchat-drawer')).join(':')
                 """
             guard evaluate("document.body.insertAdjacentHTML('beforeend', \(encodedPanes)); 'done'", in: original) == "done",
-                  waitForValue("rgba(0, 0, 0, 0):rgba(0, 0, 0, 0):rgb(60, 65, 70):1:true:false", in: original, script: paneStyle)
+                  waitForValue("true:none:rgba(0, 0, 0, 0):rgb(60, 65, 70):1:true:false", in: original, script: paneStyle)
                   else { return false }
             guard evaluate("document.querySelector('#drawer').remove(); document.querySelector('#mainPane').remove(); 'done'", in: original) == "done",
                   waitForValue(translucent, in: original, script: background) else { return false }
