@@ -11,6 +11,20 @@ final class GlobalHotKey {
     private var ref: EventHotKeyRef?
     private let id: UInt32
 
+    /// A one-shot registration probe. Other apps' local shortcuts are not discoverable.
+    static func availabilityIssue(_ shortcut: Shortcut) -> String? {
+        if shortcut.keyCode == UInt32(kVK_Space), [UInt32(cmdKey), UInt32(controlKey), UInt32(cmdKey | optionKey)].contains(shortcut.carbonModifiers) {
+            return "Reserved by macOS. Choose another combination."
+        }
+        do {
+            let probe = try GlobalHotKey(shortcut) {}
+            probe.unregister()
+            return nil
+        } catch {
+            return "Unavailable for global registration. Another app may be using it."
+        }
+    }
+
     /// Registers `shortcut`; throws if the system refuses it.
     init(_ shortcut: Shortcut, handler: @escaping @MainActor () -> Void) throws {
         Self.installEventHandlerIfNeeded()
@@ -33,6 +47,22 @@ final class GlobalHotKey {
         ref = nil
         Self.handlers[id] = nil
     }
+
+    #if DEBUG
+    static func runAvailabilitySelfTest() -> Bool {
+        let choices = [kVK_F18, kVK_F19, kVK_F20].map {
+            Shortcut(keyCode: UInt32($0), carbonModifiers: UInt32(controlKey | optionKey | shiftKey))
+        }
+        guard let candidate = choices.first(where: { availabilityIssue($0) == nil }),
+              let owner = try? GlobalHotKey(candidate, handler: {}) else { return false }
+        let detectsConflict = availabilityIssue(candidate) != nil
+        owner.unregister()
+        let detectsRelease = availabilityIssue(candidate) == nil
+        let reserved = availabilityIssue(Shortcut(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(cmdKey))) != nil
+        print("Shortcut checks: registered conflict=\(detectsConflict), released=\(detectsRelease), system reserved=\(reserved)")
+        return detectsConflict && detectsRelease && reserved
+    }
+    #endif
 
     private static func installEventHandlerIfNeeded() {
         guard eventHandler == nil else { return }

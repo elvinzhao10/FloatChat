@@ -11,10 +11,21 @@ final class FeatureManager {
         // Both features share the single owner of ChatGPT's Show Mini keymap entry.
         let showMini = ShowMiniController()
         self.showMini = showMini
-        features = [
-            QuickChatFeature(showMini: showMini), // core feature, listed first
-            DisableShowMiniFeature(showMini: showMini),
-        ]
+        let chat = QuickChatFeature(showMini: showMini)
+        let mini = DisableShowMiniFeature(showMini: showMini)
+        features = [chat, mini]
+        chat.shortcutControls = { [weak self, weak chat] in
+            guard let self else { return [] }
+            return self.features.map { feature in
+                ChatSettingsView.ShortcutControl(id: feature.id, title: feature.title,
+                    checked: feature.isChecked, enabled: feature.canToggle, detail: feature.statusText,
+                    toggle: { [weak self, weak chat, weak feature] in
+                        guard let feature else { return }
+                        self?.toggle(feature)
+                        chat?.refreshSettings()
+                    })
+            }
+        }
     }
 
     private let showMini: ShowMiniController

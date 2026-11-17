@@ -8,14 +8,22 @@ import AppKit
 @MainActor
 final class QuickChatFeature: Feature {
     let id = "miniChat" // pre-rename id; persisted, keep
-    var title: String { "Enable Global Shortcut" }
+    var title: String { AppText.t("Enable Global Shortcut") }
     private(set) var isEnabled = false
 
     private let log = Log.make("QuickChat")
     private let showMini: ShowMiniController
     private var shortcut = Shortcut.load()
     private var hotKey: GlobalHotKey?
-    private lazy var chat = QuickChatController()
+    private lazy var chat: QuickChatController = {
+        let controller = QuickChatController()
+        controller.shortcutControls = { [weak self] in self?.shortcutControls?() ?? [] }
+        controller.configureShortcut = { [weak self] in self?.editShortcut() }
+        return controller
+    }()
+    var shortcutControls: (() -> [ChatSettingsView.ShortcutControl])?
+    func refreshSettings() { chat.updateSettings() }
+
     private let recorder = ShortcutRecorderWindow()
 
     init(showMini: ShowMiniController) {
@@ -40,7 +48,6 @@ final class QuickChatFeature: Feature {
         hotKey?.unregister()
         hotKey = nil
         recorder.close()
-        chat.tearDown()
         try? showMini.set(.quickChatShortcut, active: false)
         log.info("Disabled")
     }
@@ -52,28 +59,9 @@ final class QuickChatFeature: Feature {
 
     // MARK: Menu
 
-    private var takesMiniShortcut: Bool { showMini.reasons.contains(.quickChatShortcut) }
-
     func show() { chat.show() }
 
-    func menuItems() -> [NSMenuItem] {
-        var items: [NSMenuItem] = [
-            ActionMenuItem("Open Chat") { [weak self] in self?.show() },
-        ]
-        items.append(ActionMenuItem("Settings…") { [weak self] in self?.chat.showSettings() })
-        let websites = NSMenuItem(title: "Chat Websites", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        for item in chat.providerMenuItems() { submenu.addItem(item) }
-        websites.submenu = submenu
-        items.append(websites)
-
-        items += [
-            ActionMenuItem("Change Shortcut… (\(shortcut.displayString))") { [weak self] in self?.editShortcut() },
-            ActionMenuItem("Clear All Provider Website Data…") { [weak self] in self?.chat.signOut() },
-        ]
-        if takesMiniShortcut, let restart = showMini.restartMenuItem() { items.insert(restart, at: 0) }
-        return items
-    }
+    func menuItems() -> [NSMenuItem] { chat.quickMenuItems() }
 
     private func editShortcut() {
         // Already open: keep that session, whose `previous` is the saved shortcut to revert to.

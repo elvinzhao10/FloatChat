@@ -22,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         (manager.features.first as? QuickChatFeature)?.show()
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        (manager.features.first as? QuickChatFeature)?.show()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         Log.app.info("QuickChat terminating; restoring ChatGPT state")
         manager.disableAll()

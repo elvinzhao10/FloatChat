@@ -5,10 +5,16 @@ import SwiftUI
 /// Floating Quick Chat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
 /// web view, which uses its compact layout at this width.
 @MainActor
-final class QuickChatController: NSObject {
+final class QuickChatController: NSObject, NSWindowDelegate {
     private struct Provider: Codable {
         var name: String
         var url: URL
+        var sessionID: String? = nil
+        var conversationURL: URL? = nil
+        var topic: String? = nil
+        var pinned: Bool? = nil
+        var key: String { sessionID ?? url.absoluteString }
+        var isPinned: Bool { pinned == true }
     }
     private static let builtIns = [
         Provider(name: "ChatGPT", url: URL(string: "https://chatgpt.com/")!),
@@ -20,32 +26,133 @@ final class QuickChatController: NSObject {
         Provider(name: "Copilot", url: URL(string: "https://copilot.microsoft.com/")!),
         Provider(name: "Grok", url: URL(string: "https://grok.com/")!),
     ]
-    private var customProviders: [Provider] = {
-        guard let data = UserDefaults.standard.data(forKey: "customProviders"),
-              let providers = try? JSONDecoder().decode([Provider].self, from: data) else { return [] }
-        return providers.filter { $0.url.scheme?.lowercased() == "https" && $0.url.host != nil }
-    }()
-    private var providers: [Provider] { Self.builtIns + customProviders }
-    private var disabledURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "disabledProviders") ?? [])
+    private let preferences: UserDefaults
+    private var customProviders: [Provider] = []
+    private var savedSessions: [Provider] = []
+    private var pageURLObservation: NSKeyValueObservation?
+    private var pageTitleObservation: NSKeyValueObservation?
+    private weak var pinButton: NSButton?
+    private var deletedURLs: Set<String> = []
+    private var providerOrder: [String] = []
+
+    init(preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+        super.init()
+        if let data = preferences.data(forKey: "customProviders"),
+           let stored = try? JSONDecoder().decode([Provider].self, from: data) {
+            var seen = Set(Self.builtIns.map { $0.url.absoluteString })
+            customProviders = stored.compactMap { provider in
+                guard let url = ProviderAddress.parse(provider.key), seen.insert(url.absoluteString).inserted else { return nil }
+                return Provider(name: provider.name, url: url)
+            }
+        }
+        if let data = preferences.data(forKey: "pinnedSessions"), let stored = try? JSONDecoder().decode([Provider].self, from: data) {
+            var seen = Set<String>()
+            savedSessions = stored.filter { item in
+                guard item.sessionID != nil, item.isPinned, ProviderAddress.parse(item.url.absoluteString) != nil, seen.insert(item.key).inserted else { return false }
+                guard let target = item.conversationURL else { return false }
+                return ProviderAddress.parse(target.absoluteString) != nil && ProviderAddress.matchesWebsite(host: target.host, baseHost: item.url.host) && target.user == nil && target.password == nil
+            }
+        }
+        deletedURLs = Set(preferences.stringArray(forKey: "deletedProviders") ?? [])
+        providerOrder = preferences.stringArray(forKey: "providerOrder") ?? []
+        disabledURLs = Set(preferences.stringArray(forKey: "disabledProviders") ?? [])
+        if providers.isEmpty { deletedURLs.remove(Self.builtIns[0].url.absoluteString) }
+        if providers.allSatisfy({ disabledURLs.contains($0.key) }) { disabledURLs.remove(providers[0].key) }
+        if let saved = preferences.string(forKey: "selectedProvider"), let index = providers.firstIndex(where: { $0.key == saved }) { selectedIndex = index }
+    }
+    private var providers: [Provider] {
+        let available = (Self.builtIns + customProviders + savedSessions).filter { !deletedURLs.contains($0.key) }
+        return available.enumerated().sorted { lhs, rhs in
+            let a = providerOrder.firstIndex(of: lhs.element.key) ?? (providerOrder.count + lhs.offset)
+            let b = providerOrder.firstIndex(of: rhs.element.key) ?? (providerOrder.count + rhs.offset)
+            return a < b
+        }.map(\.element)
+    }
+
+    private var disabledURLs: Set<String> = []
+    private var pinnedFirst: Bool { preferences.bool(forKey: "pinnedFirst") }
+    private var language: String { preferences.string(forKey: "appLanguage") ?? "en" }
     private var settingsWindow: NSWindow?
     private let settingsFields = ChatSettingsFields()
 
-    func providerMenuItems() -> [NSMenuItem] {
-        providers.enumerated().map { index, provider in
-            let item = ActionMenuItem(provider.name) { [weak self] in self?.toggleProvider(index) }
-            item.state = disabledURLs.contains(provider.url.absoluteString) ? .off : .on
-            return item
+    var configureShortcut: (() -> Void)?
+    var shortcutControls: (() -> [ChatSettingsView.ShortcutControl])?
+
+    func quickMenuItems() -> [NSMenuItem] {
+        let open = ActionMenuItem(AppText.t("Open Chat")) { [weak self] in self?.show() }
+        let switchChat = NSMenuItem(title: AppText.t("Switch Chat"), action: nil, keyEquivalent: "")
+        let chats = NSMenu()
+        switchChat.submenu = chats
+        for pinned in pinnedFirst ? [true, false] : [false, true] {
+            let group = enabledTabIndices.filter { providers[$0].isPinned == pinned }
+            guard !group.isEmpty else { continue }
+            let heading = NSMenuItem(title: AppText.t(pinned ? "Pinned Conversations" : "Instant Chats"), action: nil, keyEquivalent: "")
+            heading.isEnabled = false
+            chats.addItem(heading)
+            for index in group {
+                let provider = providers[index]
+                let item = ActionMenuItem(displayName(provider)) { [weak self] in self?.selectProvider(index); self?.show() }
+                item.image = ProviderIcon.image(for: provider.url, size: 16)
+                item.state = index == selectedIndex ? .on : .off
+                chats.addItem(item)
+            }
         }
+        let settings = ActionMenuItem(AppText.t("Settings…")) { [weak self] in self?.showSettings() }
+        return [open, switchChat, .separator(), settings]
+    }
+    private func reorderProviders(_ offsets: IndexSet, to destination: Int) {
+        let selected = providers[selectedIndex].key
+        var ordered = providers.map(\.key)
+        ordered.move(fromOffsets: offsets, toOffset: destination)
+        providerOrder = ordered
+        preferences.set(ordered, forKey: "providerOrder")
+        selectedIndex = providers.firstIndex(where: { $0.key == selected }) ?? 0
+        refreshPicker(); updateSettings()
+    }
+    private func removeProvider(_ index: Int) {
+        guard providers.indices.contains(index), providers.count > 1 else { return }
+        let provider = providers[index]
+        let alert = NSAlert()
+        alert.messageText = AppText.t("Remove") + " \(provider.topic ?? provider.name)?"
+        alert.informativeText = provider.sessionID == nil
+            ? AppText.t("Removes this website from your list. Your account, conversations and sign-in data are kept. You can add it again later.")
+            : AppText.t("Closes this chat tab and removes its saved link. Unsent drafts in this tab will be lost. The conversation on the website and your sign-in data are kept.")
+        alert.addButton(withTitle: AppText.t("Cancel"))
+        alert.addButton(withTitle: AppText.t("Remove"))
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        deleteProvider(index)
+    }
+    private func deleteProvider(_ index: Int) {
+        guard providers.indices.contains(index), providers.count > 1 else { return }
+        let provider = providers[index]
+        if index == selectedIndex, let next = providers.indices.first(where: { $0 != index }) {
+            disabledURLs.remove(providers[next].key)
+            preferences.set(Array(disabledURLs), forKey: "disabledProviders")
+            selectProvider(next)
+        }
+        let selected = providers[selectedIndex].key
+        let key = provider.key
+        if let page = parkedPages.removeValue(forKey: key) { releasePage(page.view) }
+        visitedURLs.removeValue(forKey: key)
+        if provider.sessionID == nil { customProviders.removeAll { $0.url == provider.url && $0.sessionID == nil } }
+        savedSessions.removeAll { $0.key == key }
+        saveSessions()
+        deletedURLs.insert(key)
+        preferences.set(Array(deletedURLs), forKey: "deletedProviders")
+        saveCustomProviders()
+        selectedIndex = providers.firstIndex(where: { $0.key == selected }) ?? 0
+        prunePages(); refreshPicker(); updateSettings()
     }
     private func toggleProvider(_ index: Int) {
-        let key = providers[index].url.absoluteString
+        let key = providers[index].key
         if disabledURLs.contains(key) { disabledURLs.remove(key) }
         else {
-            guard providers.filter({ !disabledURLs.contains($0.url.absoluteString) }).count > 1 else { NSSound.beep(); return }
+            guard providers.filter({ !disabledURLs.contains($0.key) }).count > 1 else { NSSound.beep(); return }
             disabledURLs.insert(key)
         }
-        UserDefaults.standard.set(Array(disabledURLs), forKey: "disabledProviders")
-        if disabledURLs.contains(chatURL.absoluteString), let next = providers.firstIndex(where: { !disabledURLs.contains($0.url.absoluteString) }) { selectProvider(next) }
+        preferences.set(Array(disabledURLs), forKey: "disabledProviders")
+        if disabledURLs.contains(providers[selectedIndex].key), let next = providers.firstIndex(where: { !disabledURLs.contains($0.key) }) { selectProvider(next) }
         if disabledURLs.contains(key), let page = parkedPages.removeValue(forKey: key) { releasePage(page.view) }
         prunePages()
         refreshPicker()
@@ -53,31 +160,119 @@ final class QuickChatController: NSObject {
     }
     @objc func showSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 560), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "Quick Chat Omni Settings"
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 520), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = AppText.t("Settings")
+            window.level = .floating
+            window.delegate = self
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindow = window
         }
         updateSettings()
+        hide(restoreFocus: false)
         NSApp.activate()
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
-    private func updateSettings() {
-        settingsWindow?.contentView = NSHostingView(rootView: ChatSettingsView(
-            fields: settingsFields, retention: retentionMinutes,
-            setRetention: { [weak self] minutes in
-                self?.retentionMinutes = minutes; self?.prunePages(); self?.updateSettings()
+    func windowWillClose(_ notification: Notification) {
+        if notification.object as? NSWindow === settingsWindow {
+            DispatchQueue.main.async { [weak self] in self?.show() }
+        }
+    }
+    func updateSettings() {
+        guard let settingsWindow else { return }
+        let view = ChatSettingsView(
+            fields: settingsFields,
+            pinnedFirst: pinnedFirst,
+            setPinnedFirst: { [weak self] first in
+                self?.preferences.set(first, forKey: "pinnedFirst"); self?.refreshPicker(); self?.updateSettings()
             },
+            language: language,
+            setLanguage: { [weak self] code in self?.setLanguage(code) },
+            reloadPages: { [weak self] in self?.reloadForLanguage() },
+            retention: retentionMinutes,
+            setRetention: { [weak self] minutes in self?.retentionMinutes = minutes; self?.prunePages(); self?.updateSettings() },
+            shortcutControls: shortcutControls?() ?? [],
+            shortcuts: { [weak self] in self?.configureShortcut?() },
+            reorder: { [weak self] offsets, destination in self?.reorderProviders(offsets, to: destination) },
+            remove: { [weak self] index in self?.removeProvider(index) },
+            unpin: { [weak self] index in self?.unpinProvider(index) },
             providers: providers.enumerated().map { index, provider in
-                ChatSettingsView.Row(id: index, name: provider.name, host: provider.url.host ?? "", enabled: !disabledURLs.contains(provider.url.absoluteString))
+                ChatSettingsView.Row(id: provider.key, index: index, name: displayName(provider), url: provider.url, pinned: provider.isPinned, enabled: !disabledURLs.contains(provider.key))
             }, toggle: { [weak self] in self?.toggleProvider($0) },
             add: { [weak self] name, address in
-                guard let self, let url = URL(string: address), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil, !self.providers.contains(where: { $0.url == url }), !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
-                self.customProviders.append(Provider(name: name, url: url))
-                self.saveCustomProviders(); self.refreshPicker(); self.updateSettings()
-                return true
-            }))
+                self?.addWebsite(name, address: address) ?? false
+            })
+        if let host = settingsWindow.contentView as? NSHostingView<ChatSettingsView> {
+            host.rootView = view
+        } else {
+            settingsWindow.contentView = NSHostingView(rootView: view)
+        }
+    }
+    private func setLanguage(_ code: String) {
+        guard AppText.supported.contains(code) else { return }
+        preferences.set(code, forKey: "appLanguage")
+        if preferences === UserDefaults.standard { AppText.applyOwnLanguage(); EditMenu.install() }
+        for view in parkedPages.values.map(\.view) + [webView].compactMap({ $0 }) {
+            configureScripts(view.configuration.userContentController)
+        }
+        settingsWindow?.title = AppText.t("Settings")
+        updateSettings()
+        func localize(_ view: NSView) {
+            if let button = view as? NSButton, let key = button.identifier?.rawValue, key.hasPrefix("toolbar:") {
+                let label = AppText.t(String(key.dropFirst(8)))
+                button.toolTip = label; button.setAccessibilityLabel(label)
+            }
+            for child in view.subviews { localize(child) }
+        }
+        if let chromeView { localize(chromeView) }
+        refreshPicker()
+    }
+    private func pageRequest(_ url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        let tag = AppText.webTag(for: language)
+        let primary = String(tag.split(separator: "-").first ?? "en")
+        request.setValue("\(tag),\(primary);q=0.9", forHTTPHeaderField: "Accept-Language")
+        return request
+    }
+    private func configureScripts(_ scripts: WKUserContentController) {
+        scripts.removeAllUserScripts()
+        scripts.addUserScript(WKUserScript(source: Self.noAutocorrectScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let tag = AppText.webTag(for: language)
+        let languages = [tag, String(tag.split(separator: "-").first ?? "en")]
+        let data = try! JSONEncoder().encode(languages)
+        let json = String(data: data, encoding: .utf8)!
+        let source = """
+        (() => { try {
+          const languages = Object.freeze(\(json));
+          Object.defineProperty(navigator, 'language', { configurable: true, get: () => languages[0] });
+          Object.defineProperty(navigator, 'languages', { configurable: true, get: () => languages });
+        } catch (_) {} })();
+        """
+        scripts.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+    private func reloadForLanguage() {
+        let alert = NSAlert()
+        alert.messageText = AppText.t("Reload open chats?")
+        alert.informativeText = AppText.t("This keeps sign-ins and pinned links. Unsent drafts in open pages may be lost.")
+        alert.addButton(withTitle: AppText.t("Cancel"))
+        alert.addButton(withTitle: AppText.t("Reload"))
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        rememberPinnedPage()
+        for page in parkedPages.values { releasePage(page.view) }
+        parkedPages.removeAll(); visitedURLs.removeAll(); prunePages()
+        if let webView { webView.load(pageRequest(webView.url ?? chatURL)) }
+    }
+    private func addWebsite(_ name: String, address: String) -> Bool {
+        guard let url = ProviderAddress.parse(address), !providers.contains(where: { $0.sessionID == nil && $0.url == url }), !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        let selected = providers[selectedIndex].key
+        deletedURLs.remove(url.absoluteString)
+        preferences.set(Array(deletedURLs), forKey: "deletedProviders")
+        if !Self.builtIns.contains(where: { $0.url == url }) { customProviders.append(Provider(name: name, url: url)) }
+        disabledURLs.remove(url.absoluteString)
+        preferences.set(Array(disabledURLs), forKey: "disabledProviders")
+        selectedIndex = providers.firstIndex(where: { $0.key == selected }) ?? 0
+        saveCustomProviders(); refreshPicker(); updateSettings()
+        return true
     }
     @objc private func openInBrowser(_ sender: Any?) {
         let url = webView?.url ?? chatURL
@@ -89,6 +284,14 @@ final class QuickChatController: NSObject {
     private var selectedIndex = 0
     private var visitedURLs: [String: URL] = [:]
     private var providerTabs: NSStackView?
+    private var pinnedTabs: NSStackView?
+    private weak var pinnedRow: NSStackView?
+    private var enabledTabIndices: [Int] {
+        let enabled = providers.indices.filter { !disabledURLs.contains(providers[$0].key) }
+        let instant = enabled.filter { !providers[$0].isPinned }
+        let pinned = enabled.filter { providers[$0].isPinned }
+        return pinnedFirst ? pinned + instant : instant + pinned
+    }
     private weak var contentStack: NSStackView?
     private weak var resizeGrip: NSView?
     private struct ParkedPage {
@@ -99,13 +302,15 @@ final class QuickChatController: NSObject {
     private var evictionTimer: Timer?
     private var retentionMinutes: Int {
         get {
-            let value = UserDefaults.standard.object(forKey: "retentionMinutes") as? Int ?? 10
+            let value = preferences.object(forKey: "retentionMinutes") as? Int ?? 10
             return [0, 1, 5, 10, 30].contains(value) ? value : 10
         }
-        set { UserDefaults.standard.set(newValue, forKey: "retentionMinutes") }
+        set { preferences.set(newValue, forKey: "retentionMinutes") }
     }
     private func releasePage(_ view: WKWebView) {
         view.stopLoading()
+        view.setMicrophoneCaptureState(.none, completionHandler: nil)
+        view.setCameraCaptureState(.none, completionHandler: nil)
         view.navigationDelegate = nil
         view.uiDelegate = nil
     }
@@ -116,10 +321,12 @@ final class QuickChatController: NSObject {
         let cutoff = now.addingTimeInterval(-lifetime)
         for (key, page) in parkedPages where page.parkedAt <= cutoff {
             releasePage(page.view)
+            forgetExpiredInstant(key)
             parkedPages.removeValue(forKey: key)
         }
         while parkedPages.count > 3, let oldest = parkedPages.min(by: { $0.value.parkedAt < $1.value.parkedAt }) {
             releasePage(oldest.value.view)
+            forgetExpiredInstant(oldest.key)
             parkedPages.removeValue(forKey: oldest.key)
         }
         if let oldest = parkedPages.values.map(\.parkedAt).min() {
@@ -131,6 +338,12 @@ final class QuickChatController: NSObject {
         }
     }
     private func observePageColor(_ view: WKWebView) {
+        pageURLObservation = view.observe(\.url, options: [.new]) { [weak self] view, _ in
+            MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage() } }
+        }
+        pageTitleObservation = view.observe(\.title, options: [.new]) { [weak self] view, _ in
+            MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage(); self?.updateTabPreviews() } }
+        }
         pageColorObservation = view.observe(\.underPageBackgroundColor, options: [.initial, .new]) { [weak self] view, _ in
             MainActor.assumeIsolated { self?.syncPageChrome(view) }
         }
@@ -149,28 +362,33 @@ final class QuickChatController: NSObject {
             chromeView?.appearance = NSAppearance(named: brightness < 0.5 ? .darkAqua : .aqua)
         }
     }
-    private var chatURL: URL { providers[selectedIndex].url }
+    private var chatURL: URL { providers[selectedIndex].conversationURL ?? providers[selectedIndex].url }
 
     private func selectProvider(_ index: Int) {
-        guard providers.indices.contains(index), !disabledURLs.contains(providers[index].url.absoluteString), index != selectedIndex else { return }
+        guard providers.indices.contains(index), !disabledURLs.contains(providers[index].key), index != selectedIndex else { return }
+        rememberPinnedPage()
         prunePages()
-        let oldKey = chatURL.absoluteString
+        let oldKey = providers[selectedIndex].key
         if let old = webView {
             if let url = old.url, isProviderHost(url.host, provider: providers[selectedIndex]) { visitedURLs[oldKey] = url }
             contentStack?.removeArrangedSubview(old)
             old.removeFromSuperview()
+            old.setAllMediaPlaybackSuspended(true)
+            old.setMicrophoneCaptureState(.none, completionHandler: nil)
+            old.setCameraCaptureState(.none, completionHandler: nil)
             parkedPages[oldKey] = ParkedPage(view: old, parkedAt: .now)
         }
         selectedIndex = index
-        UserDefaults.standard.set(chatURL.absoluteString, forKey: "selectedProvider")
+        preferences.set(providers[selectedIndex].key, forKey: "selectedProvider")
         if contentStack != nil {
-            let cached = parkedPages.removeValue(forKey: chatURL.absoluteString)
+            let cached = parkedPages.removeValue(forKey: providers[selectedIndex].key)
             let next = cached?.view ?? makeWebView()
             webView = next
+            next.setAllMediaPlaybackSuspended(false)
             contentStack?.addArrangedSubview(next)
             if let resizeGrip { contentStack?.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
             observePageColor(next)
-            if cached == nil { next.load(URLRequest(url: visitedURLs[chatURL.absoluteString] ?? chatURL)) }
+            if cached == nil { next.load(pageRequest(visitedURLs[providers[selectedIndex].key] ?? chatURL)) }
             panel?.makeFirstResponder(next)
         }
         crashReloads = []
@@ -179,7 +397,10 @@ final class QuickChatController: NSObject {
         prunePages()
     }
 
-    @objc private func providerChanged(_ sender: NSButton) { selectProvider(sender.tag) }
+    @objc private func providerChanged(_ sender: NSButton) {
+        if sender.tag == selectedIndex { sender.state = .on; sender.needsDisplay = true; return }
+        selectProvider(sender.tag)
+    }
     @objc private func goBack(_ sender: Any?) { webView?.goBack() }
     @objc private func goForward(_ sender: Any?) { webView?.goForward() }
     @objc private func reloadPage(_ sender: Any?) { webView?.reload() }
@@ -189,34 +410,174 @@ final class QuickChatController: NSObject {
         button.bezelStyle = .texturedRounded
         button.isBordered = false
         button.controlSize = .small
-        button.toolTip = label
-        button.setAccessibilityLabel(label)
+        button.identifier = NSUserInterfaceItemIdentifier("toolbar:" + label)
+        button.toolTip = AppText.t(label)
+        button.setAccessibilityLabel(AppText.t(label))
         button.translatesAutoresizingMaskIntoConstraints = false
         return button
     }
 
     private func saveCustomProviders() {
-        if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: "customProviders") }
+        if let data = try? JSONEncoder().encode(customProviders) { preferences.set(data, forKey: "customProviders") }
     }
     private func refreshPicker() {
-        guard let tabs = providerTabs else { return }
-        for view in tabs.arrangedSubviews { tabs.removeArrangedSubview(view); view.removeFromSuperview() }
-        for (index, provider) in providers.enumerated() where !disabledURLs.contains(provider.url.absoluteString) {
-            let button = NSButton(title: provider.name, target: self, action: #selector(providerChanged(_:)))
+        guard let instant = providerTabs, let pinned = pinnedTabs else { return }
+        for row in [instant, pinned] {
+            for view in row.arrangedSubviews { row.removeArrangedSubview(view); view.removeFromSuperview() }
+        }
+        let enabled = enabledTabIndices
+        let instantIndices = enabled.filter { !providers[$0].isPinned }
+        let pinnedIndices = enabled.filter { providers[$0].isPinned }
+        populateTabs(instant, indices: instantIndices)
+        populateTabs(pinned, indices: pinnedIndices)
+        pinnedRow?.isHidden = pinnedIndices.isEmpty
+        if let group = pinnedRow, let separator = group.arrangedSubviews.first(where: { $0 is NSBox }), let document = instant.superview as? NSStackView {
+            for child in group.arrangedSubviews { group.removeArrangedSubview(child); child.removeFromSuperview() }
+            for child in pinnedFirst ? [pinned, separator] : [separator, pinned] { group.addArrangedSubview(child) }
+            for child in document.arrangedSubviews { document.removeArrangedSubview(child); child.removeFromSuperview() }
+            for child in pinnedFirst ? [group, instant] : [instant, group] { document.addArrangedSubview(child) }
+        }
+        pinButton?.image = NSImage(systemSymbolName: providers[selectedIndex].isPinned ? "pin.fill" : "pin", accessibilityDescription: "Pin Conversation")
+        pinButton?.isEnabled = providers[selectedIndex].isPinned || webView?.url.map { canRemember($0, provider: providers[selectedIndex]) } == true
+        pinButton?.toolTip = AppText.t(providers[selectedIndex].isPinned ? "Unpin and close this chat" : "Pin this conversation")
+        pinButton?.setAccessibilityLabel(pinButton?.toolTip)
+        if let document = providerTabs?.superview as? NSStackView {
+            document.layoutSubtreeIfNeeded()
+            document.setFrameSize(NSSize(width: document.fittingSize.width, height: 28))
+        }
+        let selectedKey = providers[selectedIndex].key
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.providers[self.selectedIndex].key == selectedKey else { return }
+            self.providerTabs?.superview?.layoutSubtreeIfNeeded()
+            for case let button as ChatTabButton in (self.providerTabs?.arrangedSubviews ?? []) + (self.pinnedTabs?.arrangedSubviews ?? []) where button.tabKey == selectedKey {
+                button.scrollToVisible(button.bounds)
+            }
+        }
+    }
+    private func populateTabs(_ row: NSStackView, indices: [Int]) {
+        for index in indices {
+            let provider = providers[index]
+            let button = ChatTabButton(image: ProviderIcon.image(for: provider.url, size: 20), target: self, action: #selector(providerChanged(_:)))
+            button.tabKey = provider.key
+            button.identifier = NSUserInterfaceItemIdentifier(provider.key)
+            button.pinned = provider.isPinned
+            button.onReorder = { [weak self] source, target in
+                guard let self, let from = self.providers.firstIndex(where: { $0.key == source }), let to = self.providers.firstIndex(where: { $0.key == target }), from != to,
+                      self.providers[from].isPinned == self.providers[to].isPinned else { return }
+                self.reorderProviders(IndexSet(integer: from), to: from < to ? to + 1 : to)
+            }
+            button.isBordered = false
+            button.setAccessibilityLabel(provider.isPinned ? displayName(provider) : provider.name)
+            button.imageScaling = .scaleProportionallyDown
+            button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
             button.tag = index
-            button.bezelStyle = .recessed
             button.setButtonType(.pushOnPushOff)
             button.state = index == selectedIndex ? .on : .off
-            button.font = .systemFont(ofSize: 12, weight: index == selectedIndex ? .semibold : .regular)
-            button.toolTip = provider.url.host
-            tabs.addArrangedSubview(button)
-            if index == selectedIndex { button.scrollToVisible(button.bounds) }
+            button.toolTip = preview(for: provider)
+            row.addArrangedSubview(button)
         }
+    }
+    private func saveSessions() {
+        if let data = try? JSONEncoder().encode(savedSessions) { preferences.set(data, forKey: "pinnedSessions") }
+    }
+    private func preview(for provider: Provider) -> String {
+        let page = provider.key == providers[selectedIndex].key ? webView : parkedPages[provider.key]?.view
+        let title = page?.title ?? provider.topic ?? provider.name
+        let topic = topicOnly(title, provider: provider)
+        return topic == "New chat" ? AppText.t(topic) : topic
+    }
+    private func displayName(_ provider: Provider) -> String {
+        if provider.isPinned, provider.topic == "New chat" { return AppText.t("New chat") }
+        return provider.topic ?? provider.name
+    }
+    private func topicOnly(_ title: String?, provider: Provider) -> String {
+        guard var title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return "New chat" }
+        if title == provider.name || title.hasPrefix(provider.name + ":") { return "New chat" }
+        for suffix in [" - " + provider.name, " | " + provider.name, " | " + (provider.url.host ?? "")] where title.hasSuffix(suffix) {
+            title = String(title.dropLast(suffix.count))
+        }
+        return title
+    }
+    private func updateTabPreviews() {
+        for case let button as ChatTabButton in (providerTabs?.arrangedSubviews ?? []) + (pinnedTabs?.arrangedSubviews ?? []) {
+            if let provider = providers.first(where: { $0.key == button.tabKey }) { button.toolTip = preview(for: provider) }
+        }
+    }
+    private func canRemember(_ url: URL, provider: Provider) -> Bool {
+        guard url.scheme == "https", isProviderHost(url.host, provider: provider) else { return false }
+        let parts = Set(url.path.lowercased().split(separator: "/").map(String.init))
+        let sensitiveQuery = Set((URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { $0.name.lowercased() })
+        return parts.isDisjoint(with: ["login", "signin", "sign-in", "sign_in", "signup", "sign-up", "sign_up", "auth", "oauth", "oauth2", "logout"])
+            && sensitiveQuery.isDisjoint(with: ["code", "token", "access_token", "refresh_token", "id_token", "password", "credential", "assertion", "session_token"])
+    }
+    private func forgetExpiredInstant(_ key: String) {
+        if providers.first(where: { $0.key == key })?.isPinned != true { visitedURLs.removeValue(forKey: key) }
+    }
+    private func rememberPinnedPage() {
+        let provider = providers[selectedIndex]
+        guard provider.isPinned, let index = savedSessions.firstIndex(where: { $0.key == provider.key }),
+              let url = webView?.url, canRemember(url, provider: provider) else { return }
+        let title = String(topicOnly(webView?.title, provider: provider).prefix(100))
+        if savedSessions[index].conversationURL != url || savedSessions[index].topic != title {
+            savedSessions[index].conversationURL = url
+            savedSessions[index].topic = title
+            saveSessions()
+        }
+    }
+    private func unpinProvider(_ index: Int) {
+        guard providers.indices.contains(index), providers[index].isPinned else { return }
+        if index == selectedIndex { togglePin(nil) }
+        else { deleteProvider(index) }
+    }
+    @objc private func togglePin(_ sender: Any?) {
+        togglePin(url: webView?.url, title: webView?.title)
+    }
+    private func togglePin(url: URL?, title: String?) {
+        var provider = providers[selectedIndex]
+        let oldKey = provider.key
+        if provider.isPinned {
+            var destination = enabledTabIndices.first { !providers[$0].isPinned && providers[$0].url == provider.url }
+                ?? enabledTabIndices.first { !providers[$0].isPinned }
+            if destination == nil {
+                let instantKey = provider.url.absoluteString
+                if !(Self.builtIns + customProviders).contains(where: { $0.url == provider.url }) {
+                    customProviders.append(Provider(name: provider.name, url: provider.url))
+                    saveCustomProviders()
+                }
+                deletedURLs.remove(instantKey)
+                disabledURLs.remove(instantKey)
+                preferences.set(Array(deletedURLs), forKey: "deletedProviders")
+                preferences.set(Array(disabledURLs), forKey: "disabledProviders")
+                selectedIndex = providers.firstIndex(where: { $0.key == oldKey })!
+                destination = providers.firstIndex(where: { $0.key == instantKey })
+            }
+            // Unpin closes the saved tab. It never replaces or discards an existing instant page.
+            if let view = webView {
+                contentStack?.removeArrangedSubview(view)
+                view.removeFromSuperview()
+                releasePage(view)
+                webView = nil
+            }
+            if let destination { selectProvider(destination) }
+            if let closing = providers.firstIndex(where: { $0.key == oldKey }) { deleteProvider(closing) }
+            return
+        } else {
+            guard let url, canRemember(url, provider: provider) else { NSSound.beep(); return }
+            provider.sessionID = UUID().uuidString
+            provider.pinned = true
+            provider.conversationURL = url
+            provider.topic = String(topicOnly(title, provider: provider).prefix(100))
+            savedSessions.append(provider)
+            visitedURLs.removeValue(forKey: oldKey)
+            selectedIndex = providers.firstIndex(where: { $0.key == provider.key }) ?? selectedIndex
+        }
+        preferences.set(providers[selectedIndex].key, forKey: "selectedProvider")
+        saveSessions(); refreshPicker(); updateSettings()
     }
 
     private func isProviderHost(_ host: String?, provider: Provider) -> Bool {
-        guard let host = host?.lowercased(), let base = provider.url.host?.lowercased() else { return false }
-        return host == base || host.hasSuffix("." + base)
+        ProviderAddress.matchesWebsite(host: host, baseHost: provider.url.host)
     }
     /// OpenAI's sign-in hosts (and their subdomains): where sign-in starts from a chatgpt.com page.
     private static let openAISignInHosts = ["auth.openai.com", "auth0.openai.com"]
@@ -263,6 +624,7 @@ final class QuickChatController: NSObject {
     }
 
     func show() {
+        settingsWindow?.orderOut(nil)
         let panel = self.panel ?? makePanel()
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
@@ -274,6 +636,7 @@ final class QuickChatController: NSObject {
             }
         }
         hiddenAt = nil
+        webView?.setAllMediaPlaybackSuspended(false)
         // Don't activate the app: activation is only a request since macOS 14, and after a
         // Space switch macOS hands focus on to another app (Finder, the full-screen app) and the
         // panel loses the keyboard. A non-activating panel takes key without it, like Spotlight.
@@ -336,8 +699,12 @@ final class QuickChatController: NSObject {
     /// `restoreFocus`: give focus back to the app that was frontmost before showing.
     func hide(restoreFocus: Bool) {
         guard let panel, panel.isVisible else { return }
+        rememberPinnedPage()
         keepFocusUntil = nil
         panel.orderOut(nil)
+        webView?.setMicrophoneCaptureState(.none, completionHandler: nil)
+        webView?.setCameraCaptureState(.none, completionHandler: nil)
+        webView?.setAllMediaPlaybackSuspended(true)
         hiddenAt = .now
         if restoreFocus { previousApp?.activate() }
     }
@@ -350,6 +717,8 @@ final class QuickChatController: NSObject {
         panel = nil
         webView = nil
         providerTabs = nil
+        pinnedTabs = nil
+        pinnedRow = nil
         contentStack = nil
         evictionTimer?.invalidate()
         evictionTimer = nil
@@ -357,30 +726,10 @@ final class QuickChatController: NSObject {
         parkedPages.removeAll()
         chromeView = nil
         pageColorObservation = nil
+        pageURLObservation = nil
+        pageTitleObservation = nil
         crashReloads = []
         reloadOnShow = false
-    }
-
-    /// Signs out by clearing the panel's website data (cookies, storage).
-    func signOut() {
-        let alert = NSAlert()
-        alert.messageText = "Clear all provider website data?"
-        alert.informativeText = "This signs you out of every provider in Quick Chat Omni and removes their local website data."
-        alert.addButton(withTitle: "Clear Data")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let store = WKWebsiteDataStore.default()
-        store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.log.info("Cleared Quick Chat website data")
-                for page in self.parkedPages.values { self.releasePage(page.view) }
-                self.parkedPages.removeAll()
-                self.prunePages()
-                self.visitedURLs.removeAll()
-                self.webView?.load(URLRequest(url: self.chatURL))
-            }
-        }
     }
 
     // MARK: Building
@@ -398,9 +747,9 @@ final class QuickChatController: NSObject {
         panel.resetSizeShortcut = resetSizeShortcut
         panel.maximizeShortcut = maximizeShortcut
 
-        if let saved = UserDefaults.standard.string(forKey: "selectedProvider"),
-           let index = providers.firstIndex(where: { $0.url.absoluteString == saved }) { selectedIndex = index }
-        if disabledURLs.contains(chatURL.absoluteString), let next = providers.firstIndex(where: { !disabledURLs.contains($0.url.absoluteString) }) { selectedIndex = next }
+        if let saved = preferences.string(forKey: "selectedProvider"),
+           let index = providers.firstIndex(where: { $0.key == saved }) { selectedIndex = index }
+        if disabledURLs.contains(providers[selectedIndex].key), let next = providers.firstIndex(where: { !disabledURLs.contains($0.key) }) { selectedIndex = next }
         let header = DraggableView()
         header.wantsLayer = true
         header.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
@@ -409,40 +758,53 @@ final class QuickChatController: NSObject {
         let tabs = NSStackView()
         tabs.orientation = .horizontal
         tabs.spacing = 4
-        let scroll = NSScrollView()
+        let pins = NSStackView()
+        pins.orientation = .horizontal
+        pins.spacing = 4
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        separator.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        let pinnedGroup = NSStackView(views: [separator, pins])
+        pinnedGroup.spacing = 10
+        let document = NSStackView(views: [tabs, pinnedGroup])
+        document.spacing = 10
+        document.orientation = .horizontal
+        document.detachesHiddenViews = true
+        document.autoresizingMask = []
+        let scroll = ChatTabScrollView()
         scroll.drawsBackground = false
-        scroll.hasHorizontalScroller = true
-        scroll.scrollerStyle = .overlay
-        scroll.autohidesScrollers = true
-        scroll.documentView = tabs
+        scroll.contentView.drawsBackground = false
+        scroll.hasHorizontalScroller = false
+        scroll.hasVerticalScroller = false
+        scroll.horizontalScrollElasticity = .none
+        scroll.verticalScrollElasticity = .none
+        scroll.documentView = document
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        tabs.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            tabs.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            tabs.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            tabs.heightAnchor.constraint(equalTo: scroll.contentView.heightAnchor)
-        ])
         let close = toolbarButton("xmark", label: "Hide Chat", action: #selector(dismissPanel(_:)))
         header.addSubview(close)
+        let pin = toolbarButton("pin", label: "Pin Conversation", action: #selector(togglePin(_:)))
+        pinButton = pin
         let browser = toolbarButton("arrow.up.right.square", label: "Continue in Default Browser", action: #selector(openInBrowser(_:)))
         let settings = toolbarButton("slider.horizontal.3", label: "Settings", action: #selector(showSettings))
-        let controls = NSStackView(views: [browser, settings])
+        let controls = NSStackView(views: [pin, browser, settings])
         controls.spacing = 12
         controls.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(controls)
         NSLayoutConstraint.activate([
-            close.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 14),
+            close.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 12),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             scroll.leadingAnchor.constraint(equalTo: close.trailingAnchor, constant: 12),
+            scroll.trailingAnchor.constraint(equalTo: controls.leadingAnchor, constant: -12),
             scroll.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             scroll.heightAnchor.constraint(equalToConstant: 28),
-            scroll.trailingAnchor.constraint(equalTo: controls.leadingAnchor, constant: -16),
-            controls.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
+            controls.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -12),
             controls.centerYAnchor.constraint(equalTo: header.centerYAnchor)
         ])
         providerTabs = tabs
-        refreshPicker()
+        pinnedTabs = pins
+        pinnedRow = pinnedGroup
         let webView = makeWebView()
         let stack = NSStackView(views: [header, webView])
         stack.orientation = .vertical
@@ -466,9 +828,10 @@ final class QuickChatController: NSObject {
         ])
         panel.onSelectProvider = { [weak self] offset in
             guard let self else { return }
-            let enabled = self.providers.indices.filter { !self.disabledURLs.contains(self.providers[$0].url.absoluteString) }
+            let enabled = self.enabledTabIndices
             if enabled.indices.contains(offset) { self.selectProvider(enabled[offset]) }
         }
+
 
         if !panel.setFrameUsingName(QuickChatPanel.autosaveName) {
             center(panel)
@@ -477,7 +840,8 @@ final class QuickChatController: NSObject {
 
         self.panel = panel
         self.webView = webView
-        webView.load(URLRequest(url: chatURL))
+        refreshPicker()
+        webView.load(pageRequest(chatURL))
         return panel
     }
 
@@ -493,9 +857,8 @@ final class QuickChatController: NSObject {
     private func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
-        config.mediaTypesRequiringUserActionForPlayback = []
-        config.userContentController.addUserScript(WKUserScript(
-            source: Self.noAutocorrectScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.mediaTypesRequiringUserActionForPlayback = .all
+        configureScripts(config.userContentController)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = Self.safariUserAgent
         webView.uiDelegate = self
@@ -511,27 +874,26 @@ final class QuickChatController: NSObject {
     /// since the page re-renders the composer.
     private static let noAutocorrectScript = """
     (() => {
-      const apply = () => document.querySelectorAll('#prompt-textarea, [contenteditable="true"], textarea')
-        .forEach(el => {
-          if (el.getAttribute('autocorrect') === 'off') return;
-          el.setAttribute('autocorrect', 'off');
-          el.setAttribute('autocapitalize', 'off');
-          el.setAttribute('writingsuggestions', 'false');
-        });
-      new MutationObserver(apply).observe(document, { childList: true, subtree: true });
-      apply();
+      const selector = '#prompt-textarea, [contenteditable="true"], textarea';
+      const apply = el => {
+        el.setAttribute('autocorrect', 'off');
+        el.setAttribute('autocapitalize', 'off');
+        el.setAttribute('writingsuggestions', 'false');
+      };
+      const scan = node => {
+        if (node.nodeType !== 1) return;
+        if (node.matches(selector)) apply(node);
+        node.querySelectorAll(selector).forEach(apply);
+      };
+      new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(scan)))
+        .observe(document, { childList: true, subtree: true });
+      document.querySelectorAll(selector).forEach(apply);
     })();
     """
 
     private func focusComposer() {
         // Best effort: chatgpt.com's composer is a contenteditable #prompt-textarea.
         webView?.evaluateJavaScript("document.querySelector('#prompt-textarea')?.focus()")
-    }
-
-    /// chatgpt.com or a subdomain of it (not e.g. "notchatgpt.com").
-    private static func isChatGPTHost(_ host: String) -> Bool {
-        let host = host.lowercased()
-        return host == "chatgpt.com" || host.hasSuffix(".chatgpt.com")
     }
 
     /// blob: and data: URLs are page-generated files (exports, images); they're saved, never shown.
@@ -558,11 +920,8 @@ final class QuickChatController: NSObject {
         return candidate
     }
 
-    /// Whether a link to `url`, clicked on the page `source`, opens in the browser. Decided by
-    /// where the link was clicked, not by a list of destinations: answers only appear on
-    /// chatgpt.com, so a link from there that leaves ChatGPT (and isn't its sign-in) goes to the
-    /// browser. Any other page in the panel is part of a sign-in flow (Google, Apple, Microsoft,
-    /// SSO), whose links stay in the panel whatever host they use.
+    /// External links from the selected website open in the browser, while recognized
+    /// authentication hosts stay in WebKit. Other pages in an SSO flow may redirect in-panel.
     private func opensInBrowser(_ url: URL?, from source: URL?) -> Bool {
         guard let host = url?.host?.lowercased(), isProviderHost(source?.host, provider: providers[selectedIndex]) else { return false }
         let authHosts = Self.openAISignInHosts + ["accounts.google.com", "appleid.apple.com", "login.microsoftonline.com", "login.live.com", "auth.deepseek.com", "auth.claude.ai"]
@@ -577,7 +936,8 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     /// `window.open` / target=_blank: opens in the panel, unless `opensInBrowser` sends it to the browser.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard webView === self.webView, let url = navigationAction.request.url else { return nil }
+        guard webView === self.webView, panel?.isVisible == true, let url = navigationAction.request.url else { return nil }
+        guard url.scheme == "https" || Self.isGeneratedFile(url) else { return nil }
         if Self.isGeneratedFile(url) {
             // window.open(blob:/data:) would otherwise replace the chat in the panel.
             webView.startDownload(using: navigationAction.request) { $0.delegate = self }
@@ -593,6 +953,9 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         guard webView === self.webView else { decisionHandler(.cancel); return }
         let url = navigationAction.request.url
+        if let scheme = url?.scheme?.lowercased(), !["https", "about", "blob", "data"].contains(scheme) {
+            decisionHandler(.cancel); return
+        }
         // <a download>, blob:/data: links: save the file instead of navigating (checked first, as
         // download links often point at file hosts that would otherwise open in the browser).
         if navigationAction.shouldPerformDownload || (navigationAction.targetFrame?.isMainFrame == true && Self.isGeneratedFile(url)) {
@@ -626,7 +989,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if webView === self.webView { focusComposer() }
+        if webView === self.webView { focusComposer(); rememberPinnedPage(); refreshPicker() }
     }
 
     /// macOS may kill the web content process (often while hidden, under memory pressure), which
@@ -652,13 +1015,13 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     private func reload(_ webView: WKWebView) {
-        if webView.url != nil { webView.reload() } else { webView.load(URLRequest(url: chatURL)) }
+        if webView.url != nil { webView.reload() } else { webView.load(pageRequest(chatURL)) }
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping @MainActor ([URL]?) -> Void) {
-        guard webView === self.webView, let panel else { return completionHandler(nil) }
+        guard webView === self.webView, let panel, panel.isVisible else { return completionHandler(nil) }
         let open = NSOpenPanel()
         open.allowsMultipleSelection = parameters.allowsMultipleSelection
         open.canChooseDirectories = parameters.allowsDirectories
@@ -672,7 +1035,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
                  decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
         // Camera and microphone alike: WebKit asks the user (per page load) on chatgpt.com only.
         // macOS's own TCC prompt also appears once per app (NSCamera/NSMicrophoneUsageDescription).
-        decisionHandler(webView === self.webView && origin.protocol == "https" && isProviderHost(origin.host, provider: providers[selectedIndex]) ? .prompt : .deny)
+        decisionHandler(webView === self.webView && panel?.isVisible == true && origin.protocol == "https" && isProviderHost(origin.host, provider: providers[selectedIndex]) ? .prompt : .deny)
     }
 
     // MARK: Downloads (WKDownloadDelegate)
@@ -992,7 +1355,76 @@ private final class ResizeGrip: NSView {
 extension QuickChatController {
     static func runCacheSelfTest() -> Bool {
         _ = NSApplication.shared
-        let controller = QuickChatController()
+        guard ProviderAddress.matchesWebsite(host: "perplexity.ai", baseHost: "www.perplexity.ai"),
+              !ProviderAddress.matchesWebsite(host: "chatgpt.com.evil.example", baseHost: "chatgpt.com"),
+              !ProviderAddress.matchesWebsite(host: "notchatgpt.com", baseHost: "chatgpt.com") else { return false }
+        let suite = "dev.quickchat.omni.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = QuickChatController(preferences: defaults)
+        let selected = controller.chatURL
+        defaults.set("zh-Hans", forKey: "appLanguage")
+        guard controller.pageRequest(selected).value(forHTTPHeaderField: "Accept-Language") == "zh-CN,zh;q=0.9" else { return false }
+        defaults.set("en", forKey: "appLanguage")
+        guard controller.pageRequest(selected).value(forHTTPHeaderField: "Accept-Language") == "en-US,en;q=0.9" else { return false }
+        controller.reorderProviders(IndexSet(integer: 0), to: 3)
+        guard controller.chatURL == selected, controller.providers[2].url == selected else { return false }
+        let restored = QuickChatController(preferences: defaults)
+        guard restored.providers[2].url == selected else { return false }
+        guard controller.addWebsite("Example", address: "EXAMPLE.com"),
+              !controller.addWebsite("Duplicate", address: "https://example.com:443/"),
+              !controller.addWebsite("Unsafe", address: "http://example.net/"),
+              !controller.addWebsite("Credentials", address: "https://user:secret@example.net/") else { return false }
+        guard ProviderAddress.parse(" https://EXAMPLE.com:443 ")?.absoluteString == "https://example.com/" else { return false }
+        let custom = controller.providers.firstIndex(where: { $0.url.host == "example.com" })!
+        controller.deleteProvider(custom)
+        guard !controller.providers.contains(where: { $0.url.host == "example.com" }), controller.chatURL == selected else { return false }
+        let before = controller.providers.count
+        controller.deleteProvider(controller.selectedIndex)
+        guard controller.providers.count == before - 1, controller.chatURL != selected else { return false }
+        guard controller.addWebsite("ChatGPT", address: selected.absoluteString) else { return false }
+        let first = controller.providers.firstIndex(where: { $0.url == selected })!
+        controller.toggleProvider(first)
+        guard controller.chatURL != selected else { return false }
+        controller.toggleProvider(first)
+        let sample = controller.providers[controller.selectedIndex]
+        guard !controller.canRemember(sample.url.appendingPathComponent("sign_in"), provider: sample),
+              !controller.canRemember(URL(string: sample.url.absoluteString + "?access_token=test")!, provider: sample) else { return false }
+        let instantKey = controller.providers[controller.selectedIndex].key
+        let sessionURL = controller.providers[controller.selectedIndex].url.appendingPathComponent("c/test-conversation")
+        controller.togglePin(url: sessionURL, title: "A pinned test conversation")
+        guard controller.savedSessions.count == 1 else { return false }
+        let pinnedKey = controller.providers[controller.selectedIndex].key
+        guard pinnedKey != instantKey else { return false }
+        let persisted = QuickChatController(preferences: defaults)
+        guard persisted.providers.contains(where: { $0.key == pinnedKey && $0.conversationURL == sessionURL }) else { return false }
+        var secondPin = controller.savedSessions[0]
+        secondPin.sessionID = UUID().uuidString
+        secondPin.topic = "Second pinned conversation"
+        controller.savedSessions.append(secondPin)
+        controller.saveSessions()
+        defaults.set(true, forKey: "pinnedFirst")
+        let secondIndex = controller.providers.firstIndex(where: { $0.key == secondPin.key })!
+        let firstIndex = controller.providers.firstIndex(where: { $0.key == pinnedKey })!
+        controller.reorderProviders(IndexSet(integer: secondIndex), to: firstIndex)
+        guard controller.providers[controller.enabledTabIndices[0]].key == secondPin.key,
+              controller.providers[controller.selectedIndex].key == pinnedKey else { return false }
+        let restoredGroups = QuickChatController(preferences: defaults)
+        guard restoredGroups.pinnedFirst, restoredGroups.providers[restoredGroups.enabledTabIndices[0]].key == secondPin.key else { return false }
+        controller.deleteProvider(controller.providers.firstIndex(where: { $0.key == secondPin.key })!)
+        defaults.set(false, forKey: "pinnedFirst")
+        guard !controller.providers[controller.enabledTabIndices[0]].isPinned else { return false }
+        controller.visitedURLs[instantKey] = sessionURL
+        controller.visitedURLs[pinnedKey] = sessionURL
+        controller.parkedPages[instantKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast)
+        controller.parkedPages[pinnedKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast)
+        controller.prunePages(minutes: 0)
+        guard controller.visitedURLs[instantKey] == nil, controller.savedSessions.first?.conversationURL == sessionURL else { return false }
+        let hiddenPin = controller.providers.firstIndex(where: { $0.key == pinnedKey })!
+        controller.toggleProvider(hiddenPin)
+        let beforeUnpin = controller.providers[controller.selectedIndex].key
+        controller.unpinProvider(hiddenPin)
+        guard controller.savedSessions.isEmpty, controller.providers[controller.selectedIndex].key == beforeUnpin else { return false }
         let now = Date()
         for index in 0..<5 {
             controller.parkedPages[String(index)] = ParkedPage(view: WKWebView(), parkedAt: now.addingTimeInterval(-Double(index)))
@@ -1005,8 +1437,64 @@ extension QuickChatController {
         controller.prunePages(at: now, minutes: 0)
         guard controller.parkedPages.isEmpty, controller.evictionTimer == nil else { return false }
         controller.tearDown()
-        print("Page cache tests passed: oldest-first capacity, expiry and immediate release")
+        print("Checks passed: provider ordering and persistence, URL validation, duplicate rejection, active-provider fallback, deletion and re-adding, independent sessions, pinned URL persistence, group ordering, language headers, unpinning, cache capacity, expiry and immediate release")
         return true
+    }
+}
+#endif
+
+#if DEBUG
+extension QuickChatController {
+    @MainActor
+    private final class LanguageScriptProbe: NSObject, WKNavigationDelegate {
+        let controller: QuickChatController
+        let defaults: UserDefaults
+        let view: WKWebView
+        var step = 0
+        var finished = false
+        var passed = true
+        init(controller: QuickChatController, defaults: UserDefaults) {
+            self.controller = controller
+            self.defaults = defaults
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = .nonPersistent()
+            controller.configureScripts(config.userContentController)
+            view = WKWebView(frame: .zero, configuration: config)
+            super.init()
+            view.navigationDelegate = self
+        }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript("navigator.language") { [weak self] value, error in
+                guard let self else { return }
+                let expected = self.step == 0 ? "en-US" : "zh-CN"
+                guard error == nil, value as? String == expected else {
+                    self.passed = false; self.finished = true; return
+                }
+                if self.step == 0 {
+                    self.step = 1
+                    self.defaults.set("zh-Hans", forKey: "appLanguage")
+                    self.controller.configureScripts(webView.configuration.userContentController)
+                    webView.loadHTMLString("<p>Locale check two</p>", baseURL: nil)
+                } else { self.finished = true }
+            }
+        }
+    }
+    static func runLanguageSelfTest() -> Bool {
+        _ = NSApplication.shared
+        let suite = "dev.quickchat.omni.locale-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("en", forKey: "appLanguage")
+        let controller = QuickChatController(preferences: defaults)
+        let probe = LanguageScriptProbe(controller: controller, defaults: defaults)
+        probe.view.loadHTMLString("<p>Locale check one</p>", baseURL: nil)
+        let deadline = Date.now.addingTimeInterval(15)
+        while !probe.finished && Date.now < deadline {
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
+        }
+        probe.view.stopLoading()
+        print("WebKit language checks: English and Chinese = \(probe.finished && probe.passed)")
+        return probe.finished && probe.passed
     }
 }
 #endif

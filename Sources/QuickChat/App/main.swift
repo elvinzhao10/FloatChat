@@ -2,6 +2,12 @@ import AppKit
 
 MainActor.assumeIsolated {
     #if DEBUG
+    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "language" {
+        exit(QuickChatController.runLanguageSelfTest() ? 0 : 1)
+    }
+    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "shortcuts" {
+        exit(GlobalHotKey.runAvailabilitySelfTest() ? 0 : 1)
+    }
     if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "pages" {
         exit(QuickChatController.runCacheSelfTest() ? 0 : 1)
     }
@@ -10,14 +16,25 @@ MainActor.assumeIsolated {
     }
     // Opens Quick Chat panel without enabling any feature (no keymap changes).
     if ProcessInfo.processInfo.environment["QUICKCHAT_DEBUG"] == "panel" {
+        AppText.applyOwnLanguage()
         EditMenu.install()
         let chat = QuickChatController()
+        let previewRecorder = ShortcutRecorderWindow()
+        chat.configureShortcut = { [weak chat] in
+            guard let chat else { return }
+            if previewRecorder.isOpen { previewRecorder.bringToFront(); return }
+            previewRecorder.show(current: Shortcut.load(), resetSize: chat.resetSizeShortcut, maximize: chat.maximizeShortcut, miniShortcut: nil,
+                onChange: { $0.save() },
+                onResetSizeChange: { [weak chat] value in chat?.resetSizeShortcut = value; value.saveAsResetSize() },
+                onMaximizeChange: { [weak chat] value in chat?.maximizeShortcut = value; value.saveAsMaximize() }, onClose: {})
+        }
         DispatchQueue.main.async { chat.show() }
         NSApplication.shared.setActivationPolicy(.accessory)
         withExtendedLifetime(chat) { NSApplication.shared.run() }
     }
     #endif
 
+    AppText.applyOwnLanguage()
     LegacyCleanup.run()
 
     let app = NSApplication.shared
