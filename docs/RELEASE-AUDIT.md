@@ -11,7 +11,13 @@
 - Download destinations have unique names within Omni and remain associated with each active download across tab changes. Completion offers a brief Finder action when the panel is visible. Download logging records events and error codes.
 - The Grok mark is bundled. Custom favicons are retrieved with a separate cookieless HTTPS session, resized and cached locally. Both READMEs describe clearing website sign-ins before uninstalling and removing local data afterward.
 
-## Manual checks for public distribution
+## Installed-app checks
+
+- Upgraded the existing Applications bundle to 0.3.0 under the same bundle identifier. ChatGPT opened with its existing sign-in.
+- Pasted mixed English and Chinese text into a temporary ChatGPT composer. Switched to Claude and back with the keyboard and verified the unsent text survived. Claude redirected to its HTTPS sign-in page.
+- Opened Settings from the panel, verified the General controls for launch at login, language, retention, shortcuts and privacy, then closed Settings and verified that the composer regained focus.
+
+## Remaining manual coverage
 
 - In a signed-in WebKit composer using Simplified Chinese Pinyin, type a syllable. Press Escape to dismiss composition, press Escape again to hide, then reopen. Copy and paste a draft with ⌘C and ⌘V, switch providers with ⌘1–9, and confirm the original draft stays unsent and intact.
 - Open the panel from a different app, type immediately, change Spaces, and return. Click another application during the transition and confirm Omni leaves it focused. Close Omni from the foreground and verify focus returns to the previous app. Move it to an external monitor and disconnect that monitor.

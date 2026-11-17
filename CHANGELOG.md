@@ -10,9 +10,9 @@
 
 ## 0.2.x version corrections
 
-The original published packages all report version 0.2.0. This table maps their published tags and source snapshots to their intended version numbers.
+The original packages all reported version 0.2.0. The corrected packages use the version numbers below and were rebuilt from the corresponding source snapshots.
 
-| Corrected version | Original build | Published tag | Source commit |
+| Corrected version | Original build | Original source tag | Source commit |
 | --- | --- | --- | --- |
 | 0.2.1 | 1 | `v0.2.0` | `0a972ce` |
 | 0.2.2 | 2 | `v0.2.0-build.2` | `07843fc` |
