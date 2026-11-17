@@ -24,7 +24,7 @@ final class KeymapOverrideGroup {
             do {
                 try keymap.restore()
             } catch {
-                keymap.log.error("Crash recovery failed: \(error.localizedDescription, privacy: .public)")
+                keymap.log.error("Crash recovery failed: \((error as NSError).code)")
             }
         }
     }
@@ -36,11 +36,10 @@ final class KeymapOverrideGroup {
         do {
             for keymap in overrides {
                 let outcome = try keymap.apply()
-                keymap.log.info("Applied (\(String(describing: outcome), privacy: .public)) to \(keymap.keymapURL.path, privacy: .public)")
+                keymap.log.info("Applied (\(String(describing: outcome), privacy: .public))")
             }
         } catch {
-            let detail = (error as? KeymapOverride.KeymapError)?.detail ?? String(describing: error)
-            log.error("Apply failed: \(error.localizedDescription, privacy: .public) [\(detail, privacy: .public)]")
+            log.error("Apply failed: \((error as NSError).code)")
             restore()
             throw (error as? KeymapOverride.KeymapError)?.featureError ?? error
         }
@@ -54,7 +53,7 @@ final class KeymapOverrideGroup {
                 let outcome = try keymap.restore()
                 keymap.log.info("Restored (\(String(describing: outcome), privacy: .public))")
             } catch {
-                keymap.log.error("Restore failed; backup kept for next launch: \(error.localizedDescription, privacy: .public)")
+                keymap.log.error("Restore failed; backup kept for next launch: \((error as NSError).code)")
             }
         }
     }

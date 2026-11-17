@@ -26,6 +26,11 @@ enum AppText {
         return text
     }
     private static let chinese: [String: String] = [
+        "Floating Window": "悬浮窗口", "Translucent background": "半透明背景",
+        "Open window at": "窗口打开位置", "Last position": "上次位置", "Default position": "默认位置",
+        "Hide when clicking outside": "点击窗口外时隐藏", "Website Zoom": "网页缩放",
+        "Website zoom shortcuts": "网页缩放快捷键", "You’re offline.": "当前没有网络连接。",
+        "Still loading…": "页面仍在加载…", "Loading…": "正在加载…",
         "Keep hidden and inactive pages": "保留隐藏和闲置的页面",
         "Releasing a page keeps sign-ins and pinned links. Unsent text or an ongoing reply may be lost.": "释放页面会保留登录状态和固定链接。未发送的文字可能丢失，正在生成的回复可能中断。",
         "Launch at Login": "登录时启动", "Approve in Login Items…": "在登录项中允许…",

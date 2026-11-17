@@ -94,7 +94,7 @@ final class FloatChatFeature: Feature {
                 self.log.info("Shortcut changed to \(self.shortcut.displayString, privacy: .public)")
                 self.showMini.offerRestartIfNeeded()
             } catch {
-                self.log.error("Shortcut rejected: \(error.localizedDescription, privacy: .public)")
+                self.log.error("Shortcut rejected: \((error as NSError).code)")
                 self.shortcut = previous
                 // Keep the shortcuts distinct after reverting.
                 if self.chat.resetSizeShortcut == previous {

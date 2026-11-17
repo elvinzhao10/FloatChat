@@ -7,6 +7,8 @@ final class ChatSettingsFields: ObservableObject {
     @Published var invalid = false
     @Published var hovered: String?
     @Published var draggedGroup: Bool?
+    @Published var zoomRow: String?
+    @Published var zoomDraft = 1.0
 }
 
 struct ChatSettingsView: View {
@@ -40,6 +42,13 @@ struct ChatSettingsView: View {
     let clearWebsiteData: () -> Void
     let clearingWebsiteData: Bool
     let reloadPages: () -> Void
+    let glassEnabled: Bool
+    let centerOnOpen: Bool
+    let hideOnClickAway: Bool
+    let zoomKeysEnabled: Bool
+    let setPanelPreference: (Bool, String) -> Void
+    let zoomFor: (String) -> Double
+    let setZoom: (String, Double) -> Void
     let retention: Int
     let setRetention: (Int) -> Void
     let shortcutControls: [ShortcutControl]
@@ -91,6 +100,7 @@ struct ChatSettingsView: View {
                 Text(provider.url.host ?? "").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
+            zoomControl(provider)
             if provider.custom || provider.pinned {
                 Button { editEntry(provider.index) } label: { Image(systemName: "pencil") }
                     .buttonStyle(.plain)
@@ -121,6 +131,40 @@ struct ChatSettingsView: View {
         }.padding(.vertical, 4).onHover { inside in fields.hovered = inside ? provider.id : nil }
             .listRowBackground(Color.clear)
     }
+    private func zoomControl(_ provider: Row) -> some View {
+        let showing = Binding(get: { fields.zoomRow == provider.id }, set: {
+            if !$0 && fields.zoomRow == provider.id { fields.zoomRow = nil }
+        })
+        let zoom = Binding(get: { fields.zoomDraft }, set: {
+            setZoom(provider.id, $0)
+            fields.zoomDraft = $0
+        })
+        let percent = zoomFor(provider.id).formatted(.percent.precision(.fractionLength(0)))
+        return Button {
+            fields.zoomDraft = zoomFor(provider.id)
+            fields.zoomRow = provider.id
+        } label: {
+            Text(percent).font(.caption.monospacedDigit())
+        }
+        .buttonStyle(.borderless)
+        .help(AppText.t("Website Zoom"))
+        .accessibilityLabel(AppText.t("Website Zoom") + " " + percent)
+        .popover(isPresented: showing) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(AppText.t("Website Zoom")).font(.headline)
+                Slider(value: zoom, in: 0.6...2, step: 0.05) { Text(AppText.t("Website Zoom")) }
+                    .labelsHidden()
+                HStack {
+                    Text(fields.zoomDraft.formatted(.percent.precision(.fractionLength(0)))).monospacedDigit()
+                    Spacer()
+                    Button(AppText.t("Actual Size")) { zoom.wrappedValue = 1 }
+                }
+            }
+            .padding(14)
+            .frame(width: 210)
+        }
+    }
+
     var body: some View {
         TabView {
             chats.tabItem { Label(AppText.t("Chats"), systemImage: "bubble.left.and.bubble.right") }
@@ -155,6 +199,10 @@ struct ChatSettingsView: View {
         }.padding(12)
     }
 
+    private func panelSetting(_ value: Bool, _ key: String) -> Binding<Bool> {
+        Binding(get: { value }, set: { setPanelPreference($0, key) })
+    }
+
     private var general: some View {
         Form {
             Toggle(AppText.t("Launch at Login"), isOn: Binding(
@@ -162,6 +210,14 @@ struct ChatSettingsView: View {
                 set: { setLaunchAtLogin($0) }))
             if loginStatus == .requiresApproval {
                 Button(AppText.t("Approve in Login Items…")) { SMAppService.openSystemSettingsLoginItems() }
+            }
+            Section(AppText.t("Floating Window")) {
+                Toggle(AppText.t("Translucent background"), isOn: panelSetting(glassEnabled, "glassEnabled"))
+                Picker(AppText.t("Open window at"), selection: panelSetting(centerOnOpen, "centerOnOpen")) {
+                    Text(AppText.t("Last position")).tag(false)
+                    Text(AppText.t("Default position")).tag(true)
+                }
+                Toggle(AppText.t("Hide when clicking outside"), isOn: panelSetting(hideOnClickAway, "hideOnClickAway"))
             }
             Section(AppText.t("Web Pages")) {
                 Picker(AppText.t("Language"), selection: Binding(get: { language }, set: { setLanguage($0) })) {
@@ -180,6 +236,7 @@ struct ChatSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section(AppText.t("Shortcuts")) {
+                Toggle(AppText.t("Website zoom shortcuts") + " (⌘+, ⌘−)", isOn: panelSetting(zoomKeysEnabled, "zoomKeysEnabled"))
                 ForEach(shortcutControls) { control in
                     Toggle(control.title, isOn: Binding(get: { control.checked }, set: { _ in control.toggle() }))
                         .disabled(!control.enabled)

@@ -19,6 +19,7 @@ MainActor.assumeIsolated {
     }
     // Opens FloatChat panel without enabling any feature (no keymap changes).
     if ProcessInfo.processInfo.environment["FLOATCHAT_DEBUG"] == "panel" {
+        _ = NSApplication.shared
         AppText.applyOwnLanguage()
         EditMenu.install()
         let chat = FloatChatController()

@@ -1,5 +1,14 @@
 # FloatChat version history
 
+## 0.3.2
+
+- Doubao (豆包) joins the built-in chat platforms.
+- Page zoom has keyboard shortcuts and a per-chat slider in Settings. Each pinned conversation can have its own zoom.
+- Settings can stay open alongside the chat panel.
+- The floating window can use a translucent background, reopen at its last or default position, and hide when you click away.
+- Tabs highlight on hover, open a space during drag, and give haptic feedback when pinned or unpinned on supported trackpads.
+- Offline, slow-load, and WebKit failures have visible recovery actions. Inactive pages are released under critical system memory pressure.
+
 ## 0.3.1
 
 - The app and GitHub repository are now FloatChat. Existing website sign-ins, pinned links, and settings carry over.

@@ -136,7 +136,7 @@ final class ShowMiniController {
             do {
                 try await ChatGPTApp.restart()
             } catch {
-                self?.log.error("Restart failed: \(error.localizedDescription, privacy: .public)")
+                self?.log.error("Restart failed: \((error as NSError).code)")
                 NSApp.activate()
                 NSAlert(error: error).runModal()
             }

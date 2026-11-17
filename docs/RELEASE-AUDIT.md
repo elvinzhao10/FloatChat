@@ -1,5 +1,11 @@
 # FloatChat release checks
 
+## 0.3.2
+
+- All five local self-tests passed. The panel regression covers independent Settings and chat windows, whole-web-view opacity, offline status recovery, keyboard delivery after switching, draft retention, and eviction. The provider test covers separate pin and instant zoom levels, Doubao registration, and rejection of authentication fragments.
+- The isolated macOS app was used to inspect the translucent web page and adjust a per-chat zoom slider. The full set of signed-in provider microphone, camera, passkey, and upload flows remains outside this run.
+- The universal package keeps the original macOS bundle identifier and uses ad-hoc signing.
+
 ## 0.3.0 (Quick Chat Omni)
 
 ## Local checks

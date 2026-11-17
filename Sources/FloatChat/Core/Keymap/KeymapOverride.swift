@@ -127,7 +127,7 @@ struct KeymapOverride {
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode(State.self, from: data)
         } catch {
-            log.error("Ignoring unreadable state file: \(error.localizedDescription, privacy: .public)")
+            log.error("Ignoring unreadable state file: \((error as NSError).code)")
             return State()
         }
     }
@@ -317,7 +317,7 @@ struct KeymapOverride {
         try write(updated, to: keymapURL)
         record(&state, before: before, after: true)
         try saveState(state)
-        log.info("Wrote \(target.displayName, privacy: .public) override to \(keymapURL.path, privacy: .public) (prior entries: \(prior.count))")
+        log.info("Wrote \(target.displayName, privacy: .public) override (prior entries: \(prior.count))")
         return .wrote
     }
 

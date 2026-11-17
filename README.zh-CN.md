@@ -5,8 +5,8 @@
   <p><a href="https://github.com/elvinzhao10/FloatChat/releases/latest"><strong>下载 Mac 版</strong></a> · <a href="README.md">English</a> · <a href="CHANGELOG.md">更新日志</a></p>
   <p>macOS 14 或更高版本 · 支持 Apple 芯片和 Intel Mac</p>
   <p><img src="docs/images/panel.png" width="350" alt="FloatChat 悬浮窗口，顶部显示网站图标，当前打开 ChatGPT"></p>
-  <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"></p>
-  <p>内置 8 个平台，也可添加你常用的聊天网站。</p>
+  <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"> <img src="Resources/Providers/doubao.png" width="24" height="24" alt="Doubao"></p>
+  <p>内置 9 个平台（含豆包），也可添加你常用的聊天网站。</p>
 </div>
 
 ## 安装与启动
@@ -14,10 +14,6 @@
 1. 下载 **DMG**，打开后将 **FloatChat** 拖入**应用程序**文件夹。ZIP 版包含同一个应用。
 2. 从**应用程序**打开 FloatChat。之后可点击菜单栏图标重新打开窗口，或在**设置 → 通用**启用全局快捷键 **⌥Space**。
 3. 点击网站图标，直接使用已有账户登录。FloatChat 无需 API 密钥。
-
-<p><img src="docs/images/menu-bar.png" width="160" alt="浅色和深色菜单栏中的 FloatChat 图标"></p>
-
-从 Quick Chat Omni 升级？请先退出旧应用，再打开 FloatChat。原有设置和网站登录状态会保留，之后可将旧应用移入废纸篓。
 
 <details>
 <summary>如果 macOS 阻止首次启动</summary>
@@ -32,6 +28,7 @@
 | --- | --- |
 | 切换聊天 | 点击网站图标或按 **⌘1–9**。横向滚动图标栏可查看更多标签。 |
 | 固定会话 | 点击图钉保存会话链接。即时聊天和固定会话在同一栏内，以细线分隔。将指针停在固定标签上可看会话主题。取消固定会关闭该标签。 |
+| 调整网页大小 | 按 **⌘+** 或 **⌘−** 缩放，按 **⌘0** 还原。也可以点击 **设置 → 聊天**中任一条目旁的百分比，使用滑块独立调整缩放。 |
 | 移动或调整大小 | 拖动窗口顶部移动，拖动角落调整大小，双击顶部放大或还原。 |
 | 在浏览器中继续 | 点击箭头，在默认浏览器中打开当前页面。网站要求在浏览器登录或上传时，也可以用这个入口。 |
 | 上传或下载文件 | 网站支持时，可使用上传按钮、粘贴或拖入文件。下载完成后，可点击**在访达中显示**查看文件。 |
@@ -44,11 +41,11 @@
 
 <p align="center"><img src="docs/images/websites.png" width="460" alt="聊天设置页面，底部显示网站名称、地址和添加按钮"></p>
 
-在**聊天**中可以拖动排序、隐藏网站、编辑自定义网站，或为固定会话重命名。右键点击标签可查看当前主机名或调整网页缩放。打开**通用**可设置语言、登录时启动、快捷键和页面保留时间。
+设置可以与悬浮窗口同时打开。在**聊天**中可以拖动排序、隐藏网站、编辑自定义网站，或为固定会话重命名。右键点击标签可查看当前主机名或调整网页缩放。打开**通用 → 悬浮窗口**可选择打开位置、点击外部时隐藏，或启用半透明背景。macOS 26 及以上使用液态玻璃效果。整个网页及其背景都会变为半透明。
 
 ## 页面保留与登录
 
-FloatChat 使用 macOS 原生 Swift、AppKit 和 WebKit。默认最多在内存中保留三个隐藏或闲置页面，每个最多保留 10 分钟。在**设置 → 通用**中选择**立即释放**可更快释放闲置页面。释放页面可能丢失未发送的文字或中断回复，但会保留固定链接和网站登录状态。
+FloatChat 使用 macOS 原生 Swift、AppKit 和 WebKit。默认最多在内存中保留三个隐藏或闲置页面，每个最多保留 10 分钟。在**设置 → 通用**中选择**立即释放**可更快释放闲置页面。系统内存严重不足时会提前释放闲置页面。释放页面可能丢失未发送的文字或中断回复，但会保留固定链接和网站登录状态。
 
 FloatChat 与默认浏览器分别管理登录状态。隐藏或移除网站会保留它的本地登录。自定义网站图标通过独立的 HTTPS 会话直接向该网站获取，不携带聊天页面的 Cookie。
 

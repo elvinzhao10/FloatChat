@@ -2,11 +2,12 @@ import AppKit
 import WebKit
 import SwiftUI
 import ServiceManagement
+import Network
 
 /// Floating FloatChat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
 /// web view, which uses its compact layout at this width.
 @MainActor
-final class FloatChatController: NSObject, NSWindowDelegate {
+final class FloatChatController: NSObject {
     private struct Provider: Codable {
         var name: String
         var url: URL
@@ -18,6 +19,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         var key: String { sessionID ?? url.absoluteString }
         var isPinned: Bool { pinned == true }
     }
+    private static let doubaoURL = URL(string: "https://www.doubao.com/chat/")!
     private static let builtIns = [
         Provider(name: "ChatGPT", url: URL(string: "https://chatgpt.com/")!),
         Provider(name: "Claude", url: URL(string: "https://claude.ai/")!),
@@ -27,6 +29,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         Provider(name: "Perplexity", url: URL(string: "https://www.perplexity.ai/")!),
         Provider(name: "Copilot", url: URL(string: "https://copilot.microsoft.com/")!),
         Provider(name: "Grok", url: URL(string: "https://grok.com/")!),
+        Provider(name: "豆包 · Doubao", url: doubaoURL),
     ]
     private let preferences: UserDefaults
     private var customProviders: [Provider] = []
@@ -42,7 +45,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         super.init()
         if let data = preferences.data(forKey: "customProviders"),
            let stored = try? JSONDecoder().decode([Provider].self, from: data) {
-            var seen = Set(Self.builtIns.map { $0.url.absoluteString })
+            var seen = Set(Self.builtIns.filter { $0.url != Self.doubaoURL }.map { $0.url.absoluteString })
             customProviders = stored.compactMap { provider in
                 guard let url = ProviderAddress.parse(provider.key), seen.insert(url.absoluteString).inserted else { return nil }
                 return Provider(name: provider.name, url: url)
@@ -66,7 +69,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
             ?? providers.firstIndex { !disabledURLs.contains($0.key) } ?? 0
     }
     private var providers: [Provider] {
-        let available = (Self.builtIns + customProviders + savedSessions).filter { !deletedURLs.contains($0.key) }
+        let available = (Self.builtIns.filter { builtIn in !customProviders.contains { $0.url == builtIn.url } } + customProviders + savedSessions).filter { !deletedURLs.contains($0.key) }
         return available.enumerated().sorted { lhs, rhs in
             let a = providerOrder.firstIndex(of: lhs.element.key) ?? (providerOrder.count + lhs.offset)
             let b = providerOrder.firstIndex(of: rhs.element.key) ?? (providerOrder.count + rhs.offset)
@@ -79,6 +82,24 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     private var language: String { preferences.string(forKey: "appLanguage") ?? "en" }
     private var settingsWindow: NSWindow?
     private var clearingWebsiteData = false
+    private var glassEnabled: Bool { preferences.bool(forKey: "glassEnabled") }
+    private var centerOnOpen: Bool { preferences.bool(forKey: "centerOnOpen") }
+    private var hideOnClickAway: Bool { preferences.bool(forKey: "hideOnClickAway") }
+    private var zoomKeysEnabled: Bool { preferences.object(forKey: "zoomKeysEnabled") as? Bool ?? true }
+
+    private func setPanelPreference(_ enabled: Bool, for key: String) {
+        preferences.set(enabled, forKey: key)
+        if key == "glassEnabled" {
+            for page in parkedPages.values { applyPageAppearance(page.view) }
+            if let webView { applyPageAppearance(webView); syncPageChrome(webView) }
+            glassBackdrop?.isHidden = !glassEnabled
+        } else if key == "centerOnOpen" {
+            panel?.remembersFrame = !enabled
+        } else if key == "zoomKeysEnabled" {
+            panel?.zoomKeysEnabled = enabled
+        }
+        updateSettings()
+    }
     private var refreshingIcons: Set<URL> = []
     private let settingsFields = ChatSettingsFields()
 
@@ -87,8 +108,10 @@ final class FloatChatController: NSObject, NSWindowDelegate {
 
     func quickMenuItems() -> [NSMenuItem] {
         let open = ActionMenuItem(AppText.t("Open Chat")) { [weak self] in self?.show() }
+        open.image = NSImage(systemSymbolName: "bubble.left", accessibilityDescription: nil)
         let switchChat = NSMenuItem(title: AppText.t("Switch Chat"), action: nil, keyEquivalent: "")
         let chats = NSMenu()
+        switchChat.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: nil)
         switchChat.submenu = chats
         for pinned in pinnedFirst ? [true, false] : [false, true] {
             let group = enabledTabIndices.filter { providers[$0].isPinned == pinned }
@@ -98,16 +121,22 @@ final class FloatChatController: NSObject, NSWindowDelegate {
             chats.addItem(heading)
             for index in group {
                 let provider = providers[index]
-                let item = ActionMenuItem(displayName(provider)) { [weak self] in self?.selectProvider(index); self?.show() }
+                let item = ActionMenuItem(displayName(provider)) { [weak self] in
+                    guard let self, let currentIndex = self.providers.firstIndex(where: { $0.key == provider.key }) else { return }
+                    self.selectProvider(currentIndex)
+                    self.show()
+                }
                 item.image = ProviderIcon.image(for: provider.url, size: 16)
                 item.state = index == selectedIndex ? .on : .off
                 chats.addItem(item)
             }
         }
         let settings = ActionMenuItem(AppText.t("Settings…")) { [weak self] in self?.showSettings() }
+        settings.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)
         let updates = ActionMenuItem(AppText.t("Check for Updates…")) {
             NSWorkspace.shared.open(URL(string: "https://github.com/elvinzhao10/FloatChat/releases/latest")!)
         }
+        updates.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
         return [open, switchChat, .separator(), settings, updates]
     }
     private func reorderProviders(_ offsets: IndexSet, to destination: Int) {
@@ -145,6 +174,11 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         if let page = parkedPages.removeValue(forKey: key) { releasePage(page.view) }
         if provider.sessionID == nil { customProviders.removeAll { $0.url == provider.url && $0.sessionID == nil } }
         savedSessions.removeAll { $0.key == key }
+        if provider.isPinned {
+            var zooms = preferences.dictionary(forKey: "websiteZoom") ?? [:]
+            zooms.removeValue(forKey: key)
+            preferences.set(zooms, forKey: "websiteZoom")
+        }
         saveSessions()
         deletedURLs.insert(key)
         preferences.set(Array(deletedURLs), forKey: "deletedProviders")
@@ -171,20 +205,24 @@ final class FloatChatController: NSObject, NSWindowDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 520), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = AppText.t("Settings")
             window.level = .floating
-            window.delegate = self
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindow = window
         }
-        updateSettings()
-        hide(restoreFocus: false)
-        NSApp.activate()
-        settingsWindow?.makeKeyAndOrderFront(nil)
-    }
-    func windowWillClose(_ notification: Notification) {
-        if notification.object as? NSWindow === settingsWindow {
-            DispatchQueue.main.async { [weak self] in self?.show() }
+        guard let settingsWindow else { return }
+        if !settingsWindow.isVisible, let panel, panel.isVisible, let screen = panel.screen {
+            let available = screen.visibleFrame
+            let frame = panel.frame
+            let size = settingsWindow.frame.size
+            let right = frame.maxX + 12
+            let left = frame.minX - size.width - 12
+            let x = right + size.width <= available.maxX ? right : max(available.minX, left)
+            let y = max(available.minY, min(frame.maxY, available.maxY) - size.height)
+            settingsWindow.setFrameOrigin(NSPoint(x: x, y: y))
         }
+        updateSettings()
+        NSApp.activate()
+        settingsWindow.makeKeyAndOrderFront(nil)
     }
     func updateSettings() {
         guard let settingsWindow else { return }
@@ -203,6 +241,16 @@ final class FloatChatController: NSObject, NSWindowDelegate {
             clearWebsiteData: { [weak self] in self?.confirmClearWebsiteData() },
             clearingWebsiteData: clearingWebsiteData,
             reloadPages: { [weak self] in self?.reloadForLanguage() },
+            glassEnabled: glassEnabled,
+            centerOnOpen: centerOnOpen,
+            hideOnClickAway: hideOnClickAway,
+            zoomKeysEnabled: zoomKeysEnabled,
+            setPanelPreference: { [weak self] value, key in self?.setPanelPreference(value, for: key) },
+            zoomFor: { [weak self] key in
+                guard let self, let provider = self.providers.first(where: { $0.key == key }) else { return 1 }
+                return self.zoom(for: provider)
+            },
+            setZoom: { [weak self] key, value in self?.setZoom(value, for: key) },
             retention: retentionMinutes,
             setRetention: { [weak self] minutes in self?.retentionMinutes = minutes; self?.prunePages(); self?.updateSettings() },
             shortcutControls: shortcutControls?() ?? [],
@@ -404,7 +452,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     /// Match the native controls to that canvas without changing the site's layout or DOM.
     private func syncPageChrome(_ webView: WKWebView) {
         let color = webView.underPageBackgroundColor ?? .windowBackgroundColor
-        chromeView?.layer?.backgroundColor = color.cgColor
+        chromeView?.layer?.backgroundColor = (glassEnabled ? color.withAlphaComponent(0.84) : color).cgColor
         if let rgb = color.usingColorSpace(.sRGB) {
             let brightness = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
             chromeView?.appearance = NSAppearance(named: brightness < 0.5 ? .darkAqua : .aqua)
@@ -429,6 +477,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     private func parkActivePage() {
         guard let view = webView else { return }
         let key = providers[selectedIndex].key
+        stopTrackingPageLoad()
         panel?.detachKeyboardFromPage(view)
         contentStack?.removeArrangedSubview(view)
         view.removeFromSuperview()
@@ -450,7 +499,8 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         webView = view
         failureURL = cached?.failureURL
         view.setAllMediaPlaybackSuspended(false)
-        view.pageZoom = zoom(for: providers[selectedIndex].url)
+        view.pageZoom = zoom(for: providers[selectedIndex])
+        applyPageAppearance(view)
         contentStack.addArrangedSubview(view)
         if let resizeGrip { contentStack.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
         observePageColor(view)
@@ -458,6 +508,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         updateWebsiteIdentity()
         updateStatus()
         if cached == nil { view.load(pageRequest(chatURL)) }
+        trackPageLoad(view)
         focusSelectedPage()
     }
 
@@ -600,6 +651,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
                 }
                 let selected = self.providers[self.selectedIndex].key
                 if url != provider.url {
+                    if selected == provider.key { self.parkActivePage() }
                     if let old = self.parkedPages.removeValue(forKey: provider.key) { self.releasePage(old.view) }
                     self.providerOrder = self.providers.map { $0.key == provider.key ? url.absoluteString : $0.key }
                     self.deletedURLs.remove(url.absoluteString)
@@ -613,7 +665,10 @@ final class FloatChatController: NSObject, NSWindowDelegate {
                 self.selectedIndex = self.providers.firstIndex(where: { $0.key == key }) ?? 0
                 self.preferences.set(key, forKey: "selectedProvider")
                 self.saveCustomProviders()
-                if url != provider.url { self.refreshFavicon(url) }
+                if url != provider.url {
+                    self.refreshFavicon(url)
+                    if self.panel?.isVisible == true { self.attachSelectedPage() }
+                }
             }
             self.prunePages()
             self.refreshPicker()
@@ -621,17 +676,24 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func zoom(for site: URL) -> Double {
-        let value = (preferences.dictionary(forKey: "websiteZoom")?[site.absoluteString] as? Double) ?? 1
+    private func zoom(for provider: Provider) -> Double {
+        let values = preferences.dictionary(forKey: "websiteZoom") ?? [:]
+        let value = (values[provider.key] ?? values[provider.url.absoluteString]) as? Double ?? 1
         return (0.6...2).contains(value) ? value : 1
     }
 
-    private func changeZoom(for site: URL, by delta: Double?) {
-        let value = delta.map { min(2, max(0.6, zoom(for: site) + $0)) } ?? 1
+    private func setZoom(_ value: Double, for key: String) {
         var values = preferences.dictionary(forKey: "websiteZoom") ?? [:]
-        values[site.absoluteString] = value
+        values[key] = min(2, max(0.6, value))
         preferences.set(values, forKey: "websiteZoom")
-        if providers[selectedIndex].url == site { webView?.pageZoom = value }
+        if providers[selectedIndex].key == key, let provider = providers.first(where: { $0.key == key }) {
+            webView?.pageZoom = zoom(for: provider)
+        }
+    }
+
+    private func changeZoom(for provider: Provider, by delta: Double?) {
+        setZoom(delta.map { zoom(for: provider) + $0 } ?? 1, for: provider.key)
+        updateSettings()
     }
 
     private func tabMenu(for provider: Provider) -> NSMenu {
@@ -643,7 +705,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         menu.addItem(identity)
         menu.addItem(.separator())
         for (label, delta) in [("Zoom In", 0.1 as Double?), ("Zoom Out", -0.1), ("Actual Size", nil)] {
-            menu.addItem(ActionMenuItem(AppText.t(label)) { [weak self] in self?.changeZoom(for: provider.url, by: delta) })
+            menu.addItem(ActionMenuItem(AppText.t(label)) { [weak self] in self?.changeZoom(for: provider, by: delta) })
         }
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(AppText.t("Reset Window Size")) { [weak self] in self?.panel?.resetSize() })
@@ -683,8 +745,11 @@ final class FloatChatController: NSObject, NSWindowDelegate {
               ProviderAddress.matchesWebsite(host: url.host, baseHost: provider.url.host) else { return false }
         let parts = Set(url.path.lowercased().split(separator: "/").map(String.init))
         let sensitiveQuery = Set((URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { $0.name.lowercased() })
+        let fragment = url.fragment?.lowercased() ?? ""
+        let sensitiveNames = ["code", "token", "access_token", "refresh_token", "id_token", "password", "credential", "assertion", "session_token"]
+        guard !sensitiveNames.contains(where: { fragment.contains($0 + "=") }) else { return false }
         return parts.isDisjoint(with: ["login", "signin", "sign-in", "sign_in", "signup", "sign-up", "sign_up", "auth", "oauth", "oauth2", "logout"])
-            && sensitiveQuery.isDisjoint(with: ["code", "token", "access_token", "refresh_token", "id_token", "password", "credential", "assertion", "session_token"])
+            && sensitiveQuery.isDisjoint(with: sensitiveNames)
     }
     private func rememberPinnedPage() {
         let provider = providers[selectedIndex]
@@ -707,6 +772,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     private func togglePin(url: URL?, title: String?) {
         var provider = providers[selectedIndex]
         let oldKey = provider.key
+        let oldZoom = zoom(for: provider)
         if provider.isPinned {
             var destination = enabledTabIndices.first { !providers[$0].isPinned && providers[$0].url == provider.url }
                 ?? enabledTabIndices.first { !providers[$0].isPinned }
@@ -733,6 +799,8 @@ final class FloatChatController: NSObject, NSWindowDelegate {
             }
             if let destination { selectProvider(destination) }
             if let closing = providers.firstIndex(where: { $0.key == oldKey }) { deleteProvider(closing) }
+            pinFeedback()
+
             return
         } else {
             guard let url, canRemember(url, provider: provider) else { NSSound.beep(); return }
@@ -742,9 +810,16 @@ final class FloatChatController: NSObject, NSWindowDelegate {
             provider.topic = String(topicOnly(title, provider: provider).prefix(100))
             savedSessions.append(provider)
             selectedIndex = providers.firstIndex(where: { $0.key == provider.key }) ?? selectedIndex
+            setZoom(oldZoom, for: provider.key)
+            pinFeedback()
         }
         preferences.set(providers[selectedIndex].key, forKey: "selectedProvider")
         saveSessions(); refreshPicker(); updateSettings()
+    }
+
+    private func pinFeedback() {
+        guard panel?.isVisible == true else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
     private func isProviderHost(_ host: String?, provider: Provider) -> Bool {
@@ -761,6 +836,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     private var previousApp: NSRunningApplication?
     /// When the panel was last shown / last lost key, and until when a Space switch may not
     /// take its focus (see `spaceDidChange()`).
+    private var isHiding = false
     private var shownAt: Date?
     private var lostKeyAt: Date?
     private var keepFocusUntil: Date?
@@ -769,6 +845,54 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     private var downloads: [ObjectIdentifier: (download: WKDownload, destination: URL)] = [:]
     /// Recent automatic reloads after the web content process died, to stop a crash loop.
     private var crashReloads: [Date] = []
+    private var connectivity: NWPathMonitor?
+    private var memoryPressure: DispatchSourceMemoryPressure?
+    private var offline = false
+    private var slowPageTimer: Timer?
+    private var slowPage = false
+    private var waitingForPage = false
+
+    private func observeSystemState() {
+        guard connectivity == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let offline = path.status == .unsatisfied
+            Task { @MainActor in
+                guard let self, self.offline != offline else { return }
+                self.offline = offline
+                self.updateStatus()
+            }
+        }
+        monitor.start(queue: .main)
+        connectivity = monitor
+        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: .critical, queue: .main)
+        pressure.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.prunePages(minutes: 0) }
+        }
+        pressure.activate()
+        memoryPressure = pressure
+    }
+
+    private func trackPageLoad(_ view: WKWebView) {
+        stopTrackingPageLoad()
+        guard view.isLoading else { return }
+        waitingForPage = true
+        updateStatus()
+        slowPageTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self, weak view] _ in
+            MainActor.assumeIsolated {
+                guard let self, let view, self.webView === view, view.isLoading else { return }
+                self.slowPage = true
+                self.updateStatus()
+            }
+        }
+    }
+
+    private func stopTrackingPageLoad() {
+        slowPageTimer?.invalidate()
+        slowPageTimer = nil
+        slowPage = false
+        waitingForPage = false
+    }
 
     /// Local shortcut (only while the panel is key) that triggers the panel's `resetSize()`.
     var resetSizeShortcut = Shortcut.loadResetSize() {
@@ -792,8 +916,8 @@ final class FloatChatController: NSObject, NSWindowDelegate {
 
     func show() {
         guard !clearingWebsiteData else { return }
-        settingsWindow?.orderOut(nil)
         let panel = self.panel ?? makePanel()
+        if centerOnOpen, !panel.isVisible { center(panel, on: NSScreen.screens.first) }
         keepPanelReachable(panel)
         attachSelectedPage()
         let front = NSWorkspace.shared.frontmostApplication
@@ -836,6 +960,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
               panel?.isVisible == true else { return }
         keepFocusUntil = nil
         previousApp = app
+        if hideOnClickAway, panel?.attachedSheet == nil, NSApp.modalWindow == nil { hide(restoreFocus: false) }
     }
 
     private func spaceDidChange() {
@@ -848,10 +973,11 @@ final class FloatChatController: NSObject, NSWindowDelegate {
 
     private func reclaimFocusIfKept() {
         guard let until = keepFocusUntil, Date.now < until,
-              let panel, panel.isVisible, panel.isOnActiveSpace else { return }
+              let panel, panel.isVisible, panel.isOnActiveSpace, settingsWindow?.isKeyWindow != true else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, let until = self.keepFocusUntil, Date.now < until,
-                  let panel = self.panel, panel.isVisible, panel.isOnActiveSpace, !panel.isKeyWindow else { return }
+                  let panel = self.panel, panel.isVisible, panel.isOnActiveSpace, !panel.isKeyWindow,
+                  self.settingsWindow?.isKeyWindow != true else { return }
             panel.makeKeyAndOrderFront(nil)
             self.focusSelectedPage()
         }
@@ -859,7 +985,9 @@ final class FloatChatController: NSObject, NSWindowDelegate {
 
     /// `restoreFocus`: give focus back to the app that was frontmost before showing.
     func hide(restoreFocus: Bool) {
-        guard let panel, panel.isVisible else { return }
+        guard let panel, panel.isVisible, !isHiding else { return }
+        isHiding = true
+        defer { isHiding = false }
         rememberPinnedPage()
         keepFocusUntil = nil
         panel.orderOut(nil)
@@ -872,6 +1000,12 @@ final class FloatChatController: NSObject, NSWindowDelegate {
 
     /// Closes the panel and releases the web view (the sign-in session stays in the data store).
     func tearDown() {
+        stopTrackingPageLoad()
+        connectivity?.cancel()
+        connectivity = nil
+        memoryPressure?.cancel()
+        memoryPressure = nil
+        offline = false
         NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         failureURL = nil
         recentDownload = nil
@@ -902,11 +1036,19 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         panel.onCancel = { [weak self] in self?.hide(restoreFocus: true) }
         panel.onGoBack = { [weak self] in self?.webView?.goBack() }
         panel.onGoForward = { [weak self] in self?.webView?.goForward() }
-        panel.onResignKey = { [weak self] in
-            self?.lostKeyAt = .now
-            self?.reclaimFocusIfKept()
+        panel.onResignKey = { [weak self, weak panel] in
+            guard let self else { return }
+            self.lostKeyAt = .now
+            if self.hideOnClickAway, let panel, panel.attachedSheet == nil, NSApp.modalWindow == nil,
+               let event = NSApp.currentEvent, event.type == .leftMouseDown || event.type == .rightMouseDown,
+               event.window !== panel, event.window !== self.settingsWindow {
+                self.hide(restoreFocus: false)
+            } else if !self.hideOnClickAway {
+                self.reclaimFocusIfKept()
+            }
         }
         observeSpaceChanges()
+        observeSystemState()
         NotificationCenter.default.addObserver(self, selector: #selector(screenConfigurationChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
         panel.resetSizeShortcut = resetSizeShortcut
@@ -979,7 +1121,35 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         stack.layer?.cornerRadius = 16
         stack.layer?.masksToBounds = true
         contentStack = stack
-        panel.contentView = stack
+        let root = NSView()
+        let backdrop: NSView
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = 16
+            backdrop = glass
+        } else {
+            let material = NSVisualEffectView()
+            material.material = .hudWindow
+            material.blendingMode = .behindWindow
+            material.state = .active
+            material.wantsLayer = true
+            material.layer?.cornerRadius = 16
+            material.layer?.masksToBounds = true
+            backdrop = material
+        }
+        glassBackdrop = backdrop
+        backdrop.isHidden = !glassEnabled
+        for layer in [backdrop, stack] {
+            layer.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(layer)
+            NSLayoutConstraint.activate([
+                layer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+                layer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+                layer.topAnchor.constraint(equalTo: root.topAnchor),
+                layer.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+            ])
+        }
+        panel.contentView = root
         let grip = ResizeGrip()
         resizeGrip = grip
         grip.translatesAutoresizingMaskIntoConstraints = false
@@ -997,16 +1167,22 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         }
 
 
-        if !panel.setFrameUsingName(FloatChatPanel.autosaveName) {
+        panel.zoomKeysEnabled = zoomKeysEnabled
+        panel.onPageZoom = { [weak self] delta in
+            guard let self else { return }
+            self.changeZoom(for: self.providers[self.selectedIndex], by: delta)
+        }
+        if centerOnOpen || !panel.setFrameUsingName(FloatChatPanel.autosaveName) {
             center(panel)
         }
-        panel.setFrameAutosaveName(FloatChatPanel.autosaveName)
+        panel.remembersFrame = !centerOnOpen
 
         self.panel = panel
         refreshPicker()
         return panel
     }
 
+    private weak var glassBackdrop: NSView?
     private var failureURL: URL?
     private var recentDownload: URL?
     private weak var identityLabel: NSTextField?
@@ -1050,17 +1226,32 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         return row
     }
 
+    private var retryURL: URL? {
+        if let failureURL { return failureURL }
+        return slowPage || (offline && waitingForPage) ? chatURL : nil
+    }
+
     private func updateStatus() {
-        notice?.isHidden = failureURL == nil && recentDownload == nil
-        noticeBrowser?.isHidden = failureURL == nil
-        noticeLabel?.stringValue = AppText.t(failureURL == nil ? "Downloaded" : "Couldn’t load this website.")
-        noticeAction?.title = AppText.t(failureURL == nil ? "Show in Finder" : "Retry")
+        let message: String?
+        if offline { message = "You’re offline." }
+        else if failureURL != nil { message = "Couldn’t load this website." }
+        else if slowPage { message = "Still loading…" }
+        else if waitingForPage { message = "Loading…" }
+        else if recentDownload != nil { message = "Downloaded" }
+        else { message = nil }
+
+        notice?.isHidden = message == nil
+        noticeBrowser?.isHidden = retryURL == nil
+        noticeAction?.isHidden = retryURL == nil && (waitingForPage || offline)
+        noticeLabel?.stringValue = message.map(AppText.t) ?? ""
+        noticeAction?.title = AppText.t(retryURL == nil ? "Show in Finder" : "Retry")
     }
 
     @objc private func noticeActionClicked() {
-        if let url = failureURL {
+        if let url = retryURL {
             crashReloads.removeAll()
             failureURL = nil
+            stopTrackingPageLoad()
             updateStatus()
             webView?.load(pageRequest(url))
         } else if let url = recentDownload {
@@ -1071,7 +1262,7 @@ final class FloatChatController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openFailedPage() {
-        if let url = failureURL { NSWorkspace.shared.open(url) }
+        if let url = retryURL { NSWorkspace.shared.open(url) }
     }
 
     private func pageFailed(_ view: WKWebView, error: Error) {
@@ -1079,13 +1270,13 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         guard !(error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled),
               !(error.domain == "WebKitErrorDomain" && error.code == 102) else { return }
         let url = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL
-        let safeURL = Self.isHTTPSPage(url) ? url : nil
         if view === webView {
-            failureURL = safeURL ?? chatURL
+            stopTrackingPageLoad()
+            failureURL = url.flatMap { canRemember($0, provider: providers[selectedIndex]) ? $0 : nil } ?? chatURL
             updateStatus()
         } else if let key = parkedPages.first(where: { $0.value.view === view })?.key,
                   let provider = providers.first(where: { $0.key == key }) {
-            parkedPages[key]?.failureURL = safeURL ?? provider.conversationURL ?? provider.url
+            parkedPages[key]?.failureURL = url.flatMap { canRemember($0, provider: provider) ? $0 : nil } ?? provider.conversationURL ?? provider.url
         }
     }
 
@@ -1113,15 +1304,20 @@ final class FloatChatController: NSObject, NSWindowDelegate {
         if frame != panel.frame { panel.setFrame(frame, display: true) }
     }
 
-    private func center(_ panel: NSPanel) {
+    private func center(_ panel: NSPanel, on preferredScreen: NSScreen? = nil) {
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        let screen = preferredScreen ?? NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         let size = NSSize(width: min(panel.frame.width, visible.width),
                           height: min(panel.frame.height, visible.height))
         panel.setFrame(NSRect(x: visible.midX - size.width / 2,
                               y: visible.minY + (visible.height - size.height) * 0.6,
                               width: size.width, height: size.height), display: true)
+    }
+
+    private func applyPageAppearance(_ view: WKWebView) {
+        // Composite the whole page so an opaque site background still shows the glass beneath.
+        view.alphaValue = glassEnabled ? 0.84 : 1
     }
 
     private func makeWebView() -> WKWebView {
@@ -1266,6 +1462,7 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
         if navigationResponse.isForMainFrame, !Self.isHTTPSPage(navigationResponse.response.url) {
+            pageFailed(webView, error: URLError(.unsupportedURL))
             decisionHandler(.cancel)
             return
         }
@@ -1283,6 +1480,10 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         download.delegate = self
     }
 
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if webView === self.webView { trackPageLoad(webView); updateStatus() }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === self.webView else {
             if let key = parkedPages.first(where: { $0.value.view === webView })?.key {
@@ -1291,6 +1492,7 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
             return
         }
         failureURL = nil
+        stopTrackingPageLoad()
         updateStatus()
         updateWebsiteIdentity()
         if panel?.isKeyWindow == true { focusSelectedPage() }
@@ -1299,7 +1501,11 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if webView === self.webView { updateWebsiteIdentity() }
+        if webView === self.webView {
+            waitingForPage = false
+            updateStatus()
+            updateWebsiteIdentity()
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -1323,7 +1529,8 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         crashReloads.removeAll { now.timeIntervalSince($0) > 60 }
         guard crashReloads.count < 3 else {
             log.error("Web content process keeps terminating")
-            failureURL = Self.isHTTPSPage(webView.url) ? webView.url : chatURL
+            stopTrackingPageLoad()
+            failureURL = chatURL
             updateStatus()
             return
         }
@@ -1358,8 +1565,9 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         // macOS's own TCC prompt also appears once per app (NSCamera/NSMicrophoneUsageDescription).
         let provider = providers[selectedIndex]
         let allowed = webView === self.webView && panel?.isVisible == true && origin.protocol == "https"
-            && isProviderHost(webView.url?.host, provider: provider)
-            && isProviderHost(origin.host, provider: provider)
+            && frame.isMainFrame && isProviderHost(origin.host, provider: provider)
+            && webView.url?.host?.lowercased() == origin.host.lowercased()
+            && (webView.url?.port ?? 443) == (origin.port == 0 ? 443 : origin.port)
         decisionHandler(allowed ? .prompt : .deny)
     }
 
@@ -1409,6 +1617,11 @@ final class FloatChatPanel: NSPanel {
     var onGoBack: (() -> Void)?
     var onGoForward: (() -> Void)?
     weak var keyboardPage: WKWebView?
+    var zoomKeysEnabled = true
+    var onPageZoom: ((Double?) -> Void)?
+    var remembersFrame = true {
+        didSet { setFrameAutosaveName(remembersFrame ? Self.autosaveName : "") }
+    }
 
     private func keyboardBelongs(to page: WKWebView) -> Bool {
         (firstResponder as? NSView)?.isDescendant(of: page) == true
@@ -1601,7 +1814,7 @@ final class FloatChatPanel: NSPanel {
     /// Leaves the maximized state as is (frame-wise) and resumes autosaving the current frame.
     private func endMaximize() {
         restoreFrame = nil
-        setFrameAutosaveName(Self.autosaveName)
+        setFrameAutosaveName(remembersFrame ? Self.autosaveName : "")
         saveFrame(usingName: Self.autosaveName)
         updateZoomTooltip()
     }
@@ -1653,7 +1866,19 @@ final class FloatChatPanel: NSPanel {
             return super.performKeyEquivalent(with: event)
         }
         if handleLocalShortcut(event) { return true }
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if zoomKeysEnabled, modifiers == .command || modifiers == [.command, .shift] {
+            switch event.charactersIgnoringModifiers {
+            case "=", "+":
+                onPageZoom?(0.1); return true
+            case "-" where modifiers == .command, "−" where modifiers == .command:
+                onPageZoom?(-0.1); return true
+            case "0" where modifiers == .command:
+                onPageZoom?(nil); return true
+            default: break
+            }
+        }
+        if modifiers == .command {
             if let text = event.charactersIgnoringModifiers, let number = Int(text), (1...9).contains(number) {
                 onSelectProvider?(number - 1); return true
             }
@@ -1769,6 +1994,12 @@ extension FloatChatController {
         config.websiteDataStore = .nonPersistent()
         let original = WKWebView(frame: .zero, configuration: config)
         let alternate = WKWebView(frame: .zero, configuration: config)
+        defaults.set(true, forKey: "glassEnabled")
+        controller.applyPageAppearance(original)
+        guard original.alphaValue < 1 else { return false }
+        defaults.set(false, forKey: "glassEnabled")
+        controller.applyPageAppearance(original)
+        guard original.alphaValue == 1 else { return false }
         let first = controller.selectedIndex
         let firstKey = controller.providers[first].key
         let secondKey = controller.providers[1].key
@@ -1825,6 +2056,16 @@ extension FloatChatController {
               typeTestKey(), waitForValue("测试草稿q:0", in: original),
               evaluate(value, in: alternate) == "q:0" else { return false }
 
+        print("Checking independent Settings and chat windows")
+        defaults.set(true, forKey: "hideOnClickAway")
+        controller.showSettings()
+        guard let settings = controller.settingsWindow, settings.isVisible, panel.isVisible,
+              controller.webView === original else { return false }
+        controller.show()
+        guard settings.isVisible, panel.isVisible else { return false }
+        settings.close()
+        guard panel.isVisible else { return false }
+
         print("Checking hide and retain")
         controller.hide(restoreFocus: false)
         guard controller.webView == nil, !panel.isVisible,
@@ -1832,12 +2073,17 @@ extension FloatChatController {
         controller.selectProvider(1)
         guard controller.webView == nil else { return false }
         print("Checking parked failure")
-        let failed = URL(string: "https://example.com/retry")!
+        let failed = controller.providers[1].url.appendingPathComponent("retry")
         controller.pageFailed(alternate, error: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet,
             userInfo: [NSURLErrorFailingURLErrorKey: failed]))
         panel.orderFrontRegardless()
         controller.attachSelectedPage()
         guard controller.webView === alternate, controller.failureURL == failed else { return false }
+        controller.offline = true
+        guard controller.retryURL == failed else { return false }
+        controller.offline = false
+        controller.failureURL = nil
+        guard controller.retryURL == nil else { return false }
         print("Checking immediate release")
         controller.retentionMinutes = 0
         controller.hide(restoreFocus: false)
@@ -1895,6 +2141,13 @@ extension FloatChatController {
         guard controller.savedSessions.count == 1 else { return false }
         let pinnedKey = controller.providers[controller.selectedIndex].key
         guard pinnedKey != instantKey else { return false }
+        let pinProvider = controller.providers[controller.selectedIndex]
+        controller.setZoom(1.5, for: pinnedKey)
+        controller.setZoom(1.1, for: instantKey)
+        guard controller.zoom(for: pinProvider) == 1.5,
+              controller.zoom(for: sample) == 1.1,
+              !controller.canRemember(URL(string: sample.url.absoluteString + "#access_token=test")!, provider: sample),
+              controller.providers.contains(where: { $0.url == Self.doubaoURL }) else { return false }
         let persisted = FloatChatController(preferences: defaults)
         guard persisted.providers.contains(where: { $0.key == pinnedKey && $0.conversationURL == sessionURL }) else { return false }
         var secondPin = controller.savedSessions[0]

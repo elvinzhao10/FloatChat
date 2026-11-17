@@ -44,7 +44,7 @@ enum ChatGPTApp {
         }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = activate
-        log.info("Launching ChatGPT at \(url.path, privacy: .public)")
+        log.info("Launching ChatGPT")
         return try await NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 }

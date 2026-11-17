@@ -29,7 +29,7 @@ enum ProviderIcon {
         let official: [(String, String)] = [
             ("chatgpt.com", "chatgpt"), ("claude.ai", "claude"), ("deepseek.com", "deepseek"),
             ("kimi.com", "kimi"), ("gemini.google.com", "gemini"), ("perplexity.ai", "perplexity"),
-            ("copilot.microsoft.com", "copilot"), ("grok.com", "grok")
+            ("copilot.microsoft.com", "copilot"), ("grok.com", "grok"), ("doubao.com", "doubao")
         ]
         let key = official.first { host == $0.0 || host.hasSuffix("." + $0.0) }?.1
         let file = key == nil ? cacheFile(for: url) : nil

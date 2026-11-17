@@ -21,7 +21,7 @@ enum LegacyCleanup {
             log.info("Restored legacy Popout Window binding (\(String(describing: outcome), privacy: .public))")
             try FileManager.default.removeItem(at: popout.stateURL)
         } catch {
-            log.error("Legacy Popout cleanup failed; will retry next launch: \(error.localizedDescription, privacy: .public)")
+            log.error("Legacy Popout cleanup failed; will retry next launch: \((error as NSError).code)")
         }
     }
 

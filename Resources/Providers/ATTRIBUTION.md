@@ -8,3 +8,4 @@ Provider favicons are bundled from their official websites for identification on
 - Perplexity: www.perplexity.ai/favicon.ico
 - Copilot: copilot.microsoft.com/favicon.ico
 - Grok: grok.com/images/android-chrome-192x192.png (declared by grok.com)
+- Doubao: lf-flow-web-cdn.doubao.com/obj/flow-doubao/favicon/new-doubao/64x64.png (declared by doubao.com)

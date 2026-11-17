@@ -65,7 +65,7 @@ final class FeatureManager {
             try feature.enable()
             if persist { defaults.set(true, forKey: key(feature.id)) }
         } catch {
-            log.error("Enable \(feature.id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            log.error("Enable \(feature.id, privacy: .public) failed: \((error as NSError).code)")
             feature.disable() // undo any partial work
             defaults.set(false, forKey: key(feature.id))
             showError(error, feature: feature)
