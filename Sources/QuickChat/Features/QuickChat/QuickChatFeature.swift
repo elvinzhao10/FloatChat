@@ -60,11 +60,15 @@ final class QuickChatFeature: Feature {
         var items: [NSMenuItem] = [
             ActionMenuItem("Open Chat") { [weak self] in self?.show() },
         ]
+        items.append(ActionMenuItem("Settings…") { [weak self] in self?.chat.showSettings() })
+        let websites = NSMenuItem(title: "Chat Websites", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for item in chat.providerMenuItems() { submenu.addItem(item) }
+        websites.submenu = submenu
+        items.append(websites)
         guard isEnabled else { return items }
         items += [
             ActionMenuItem("Change Shortcut… (\(shortcut.displayString))") { [weak self] in self?.editShortcut() },
-            ActionMenuItem("Add Provider…") { [weak self] in self?.chat.addProvider() },
-            ActionMenuItem("Remove Selected Custom Provider…") { [weak self] in self?.chat.removeCustomProvider() },
             ActionMenuItem("Clear All Provider Website Data…") { [weak self] in self?.chat.signOut() },
         ]
         if takesMiniShortcut, let restart = showMini.restartMenuItem() { items.insert(restart, at: 0) }

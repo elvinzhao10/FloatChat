@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import SwiftUI
 
 /// Floating Quick Chat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
 /// web view, which uses its compact layout at this width.
@@ -25,6 +26,59 @@ final class QuickChatController: NSObject {
         return providers.filter { $0.url.scheme?.lowercased() == "https" && $0.url.host != nil }
     }()
     private var providers: [Provider] { Self.builtIns + customProviders }
+    private var disabledURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "disabledProviders") ?? [])
+    private var settingsWindow: NSWindow?
+
+    func providerMenuItems() -> [NSMenuItem] {
+        providers.enumerated().map { index, provider in
+            let item = ActionMenuItem(provider.name) { [weak self] in self?.toggleProvider(index) }
+            item.state = disabledURLs.contains(provider.url.absoluteString) ? .off : .on
+            return item
+        }
+    }
+    private func toggleProvider(_ index: Int) {
+        let key = providers[index].url.absoluteString
+        if disabledURLs.contains(key) { disabledURLs.remove(key) }
+        else {
+            guard providers.filter({ !disabledURLs.contains($0.url.absoluteString) }).count > 1 else { NSSound.beep(); return }
+            disabledURLs.insert(key)
+        }
+        UserDefaults.standard.set(Array(disabledURLs), forKey: "disabledProviders")
+        if disabledURLs.contains(chatURL.absoluteString), let next = providers.firstIndex(where: { !disabledURLs.contains($0.url.absoluteString) }) { selectProvider(next) }
+        refreshPicker()
+        updateSettings()
+    }
+    @objc func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 560), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Quick Chat Omni Settings"
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsWindow = window
+        }
+        updateSettings()
+        NSApp.activate()
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+    private func updateSettings() {
+        settingsWindow?.contentView = NSHostingView(rootView: ChatSettingsView(
+            providers: providers.enumerated().map { index, provider in
+                ChatSettingsView.Row(id: index, name: provider.name, host: provider.url.host ?? "", enabled: !disabledURLs.contains(provider.url.absoluteString))
+            }, toggle: { [weak self] in self?.toggleProvider($0) },
+            add: { [weak self] name, address in
+                guard let self, let url = URL(string: address), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+                self.customProviders.append(Provider(name: name, url: url))
+                self.saveCustomProviders(); self.refreshPicker(); self.updateSettings()
+                return true
+            }))
+    }
+    @objc private func openInBrowser(_ sender: Any?) {
+        let url = webView?.url ?? chatURL
+        guard url.scheme == "https" else { return }
+        NSWorkspace.shared.open(url)
+    }
+    @objc private func dismissPanel(_ sender: Any?) { hide(restoreFocus: true) }
+
     private var selectedIndex = 0
     private var visitedURLs: [String: URL] = [:]
     private var providerPicker: NSPopUpButton?
@@ -37,11 +91,11 @@ final class QuickChatController: NSObject {
         }
         selectedIndex = index
         UserDefaults.standard.set(providers[index].url.absoluteString, forKey: "selectedProvider")
-        providerPicker?.selectItem(at: index)
+        providerPicker?.selectItem(withTag: index)
         webView?.load(URLRequest(url: visitedURLs[chatURL.absoluteString] ?? chatURL))
     }
 
-    @objc private func providerChanged(_ sender: NSPopUpButton) { selectProvider(sender.indexOfSelectedItem) }
+    @objc private func providerChanged(_ sender: NSPopUpButton) { selectProvider(sender.selectedTag()) }
     @objc private func goBack(_ sender: Any?) { webView?.goBack() }
     @objc private func goForward(_ sender: Any?) { webView?.goForward() }
     @objc private func reloadPage(_ sender: Any?) { webView?.reload() }
@@ -104,9 +158,13 @@ final class QuickChatController: NSObject {
     }
     private func refreshPicker() {
         providerPicker?.removeAllItems()
-        providerPicker?.addItems(withTitles: providers.map(\.name))
-        providerPicker?.selectItem(at: selectedIndex)
+        for (index, provider) in providers.enumerated() where !disabledURLs.contains(provider.url.absoluteString) {
+            providerPicker?.addItem(withTitle: provider.name)
+            providerPicker?.lastItem?.tag = index
+        }
+        providerPicker?.selectItem(withTag: selectedIndex)
     }
+
     private func isProviderHost(_ host: String?, provider: Provider) -> Bool {
         guard let host = host?.lowercased(), let base = provider.url.host?.lowercased() else { return false }
         return host == base || host.hasSuffix("." + base)
@@ -295,29 +353,37 @@ final class QuickChatController: NSObject {
 
         if let saved = UserDefaults.standard.string(forKey: "selectedProvider"),
            let index = providers.firstIndex(where: { $0.url.absoluteString == saved }) { selectedIndex = index }
-        let header = DraggableView() // native drag strip and provider picker
+        if disabledURLs.contains(chatURL.absoluteString), let next = providers.firstIndex(where: { !disabledURLs.contains($0.url.absoluteString) }) { selectedIndex = next }
+        let header = DraggableView()
+        header.material = .popover
+        header.blendingMode = .behindWindow
+        header.state = .active
         let picker = NSPopUpButton(frame: .zero, pullsDown: false)
-        picker.controlSize = .small
+        picker.controlSize = .regular
+        picker.isBordered = false
+        picker.font = .systemFont(ofSize: 13, weight: .semibold)
         picker.target = self
         picker.action = #selector(providerChanged(_:))
         picker.translatesAutoresizingMaskIntoConstraints = false
         picker.toolTip = "Choose a chat provider"
         picker.setAccessibilityLabel("Chat provider")
         header.addSubview(picker)
-        let back = toolbarButton("chevron.left", label: "Back", action: #selector(goBack(_:)))
-        let forward = toolbarButton("chevron.right", label: "Forward", action: #selector(goForward(_:)))
-        let reload = toolbarButton("arrow.clockwise", label: "Reload", action: #selector(reloadPage(_:)))
-        let controls = NSStackView(views: [back, forward, reload])
-        controls.orientation = .horizontal
-        controls.spacing = 8
+        let close = toolbarButton("xmark", label: "Hide Chat", action: #selector(dismissPanel(_:)))
+        header.addSubview(close)
+        let browser = toolbarButton("arrow.up.right.square", label: "Continue in Default Browser", action: #selector(openInBrowser(_:)))
+        let settings = toolbarButton("slider.horizontal.3", label: "Settings", action: #selector(showSettings))
+        let controls = NSStackView(views: [browser, settings])
+        controls.spacing = 12
         controls.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(controls)
         NSLayoutConstraint.activate([
-            picker.leadingAnchor.constraint(greaterThanOrEqualTo: header.leadingAnchor, constant: 80),
-            picker.centerXAnchor.constraint(equalTo: header.centerXAnchor, constant: -12),
+            close.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 14),
+            close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            picker.leadingAnchor.constraint(greaterThanOrEqualTo: close.trailingAnchor, constant: 12),
+            picker.centerXAnchor.constraint(equalTo: header.centerXAnchor),
             picker.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            picker.trailingAnchor.constraint(lessThanOrEqualTo: controls.leadingAnchor, constant: -8),
-            controls.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -12),
+            picker.trailingAnchor.constraint(lessThanOrEqualTo: controls.leadingAnchor, constant: -12),
+            controls.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
             controls.centerYAnchor.constraint(equalTo: header.centerYAnchor)
         ])
         providerPicker = picker
@@ -327,7 +393,10 @@ final class QuickChatController: NSObject {
         stack.orientation = .vertical
         stack.spacing = 0
         stack.edgeInsets = NSEdgeInsets()
-        header.heightAnchor.constraint(equalToConstant: 38).isActive = true
+        header.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        stack.wantsLayer = true
+        stack.layer?.cornerRadius = 16
+        stack.layer?.masksToBounds = true
         panel.contentView = stack
 
         if !panel.setFrameUsingName(QuickChatPanel.autosaveName) {
@@ -596,7 +665,7 @@ final class QuickChatPanel: NSPanel {
 
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect,
-                   styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+                   styleMask: [.borderless, .resizable, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         title = "Quick Chat Omni"
         titleVisibility = .hidden
@@ -616,7 +685,9 @@ final class QuickChatPanel: NSPanel {
         isReleasedWhenClosed = false
         isMovableByWindowBackground = false
         minSize = NSSize(width: 400, height: 400)
-        backgroundColor = .windowBackgroundColor
+        isOpaque = false
+        hasShadow = true
+        backgroundColor = .clear
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(frameDidChange),
                                                    name: name, object: self)
@@ -793,7 +864,7 @@ final class QuickChatPanel: NSPanel {
 }
 
 /// Header strip that drags the window; a double-click on it acts like one on the title bar.
-private final class DraggableView: NSView {
+private final class DraggableView: NSVisualEffectView {
     override var mouseDownCanMoveWindow: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
