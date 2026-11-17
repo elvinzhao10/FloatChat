@@ -28,6 +28,7 @@ final class QuickChatController: NSObject {
     private var providers: [Provider] { Self.builtIns + customProviders }
     private var disabledURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "disabledProviders") ?? [])
     private var settingsWindow: NSWindow?
+    private let settingsFields = ChatSettingsFields()
 
     func providerMenuItems() -> [NSMenuItem] {
         providers.enumerated().map { index, provider in
@@ -45,6 +46,8 @@ final class QuickChatController: NSObject {
         }
         UserDefaults.standard.set(Array(disabledURLs), forKey: "disabledProviders")
         if disabledURLs.contains(chatURL.absoluteString), let next = providers.firstIndex(where: { !disabledURLs.contains($0.url.absoluteString) }) { selectProvider(next) }
+        if disabledURLs.contains(key), let page = parkedPages.removeValue(forKey: key) { releasePage(page.view) }
+        prunePages()
         refreshPicker()
         updateSettings()
     }
@@ -62,11 +65,15 @@ final class QuickChatController: NSObject {
     }
     private func updateSettings() {
         settingsWindow?.contentView = NSHostingView(rootView: ChatSettingsView(
+            fields: settingsFields, retention: retentionMinutes,
+            setRetention: { [weak self] minutes in
+                self?.retentionMinutes = minutes; self?.prunePages(); self?.updateSettings()
+            },
             providers: providers.enumerated().map { index, provider in
                 ChatSettingsView.Row(id: index, name: provider.name, host: provider.url.host ?? "", enabled: !disabledURLs.contains(provider.url.absoluteString))
             }, toggle: { [weak self] in self?.toggleProvider($0) },
             add: { [weak self] name, address in
-                guard let self, let url = URL(string: address), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+                guard let self, let url = URL(string: address), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil, !self.providers.contains(where: { $0.url == url }), !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
                 self.customProviders.append(Provider(name: name, url: url))
                 self.saveCustomProviders(); self.refreshPicker(); self.updateSettings()
                 return true
@@ -81,7 +88,54 @@ final class QuickChatController: NSObject {
 
     private var selectedIndex = 0
     private var visitedURLs: [String: URL] = [:]
-    private var providerPicker: NSPopUpButton?
+    private var providerTabs: NSStackView?
+    private weak var contentStack: NSStackView?
+    private weak var resizeGrip: NSView?
+    private struct ParkedPage {
+        let view: WKWebView
+        let parkedAt: Date
+    }
+    private var parkedPages: [String: ParkedPage] = [:]
+    private var evictionTimer: Timer?
+    private var retentionMinutes: Int {
+        get {
+            let value = UserDefaults.standard.object(forKey: "retentionMinutes") as? Int ?? 10
+            return [0, 1, 5, 10, 30].contains(value) ? value : 10
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "retentionMinutes") }
+    }
+    private func releasePage(_ view: WKWebView) {
+        view.stopLoading()
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+    }
+    private func prunePages(at now: Date = .now, minutes: Int? = nil) {
+        let lifetime = Double(minutes ?? retentionMinutes) * 60
+        evictionTimer?.invalidate()
+        evictionTimer = nil
+        let cutoff = now.addingTimeInterval(-lifetime)
+        for (key, page) in parkedPages where page.parkedAt <= cutoff {
+            releasePage(page.view)
+            parkedPages.removeValue(forKey: key)
+        }
+        while parkedPages.count > 3, let oldest = parkedPages.min(by: { $0.value.parkedAt < $1.value.parkedAt }) {
+            releasePage(oldest.value.view)
+            parkedPages.removeValue(forKey: oldest.key)
+        }
+        if let oldest = parkedPages.values.map(\.parkedAt).min() {
+            let delay = max(0.1, oldest.addingTimeInterval(lifetime).timeIntervalSinceNow)
+            evictionTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.prunePages() }
+            }
+            evictionTimer?.tolerance = 1
+        }
+    }
+    private func observePageColor(_ view: WKWebView) {
+        pageColorObservation = view.observe(\.underPageBackgroundColor, options: [.initial, .new]) { [weak self] view, _ in
+            MainActor.assumeIsolated { self?.syncPageChrome(view) }
+        }
+    }
+
     private weak var chromeView: NSView?
     private var pageColorObservation: NSKeyValueObservation?
 
@@ -98,17 +152,34 @@ final class QuickChatController: NSObject {
     private var chatURL: URL { providers[selectedIndex].url }
 
     private func selectProvider(_ index: Int) {
-        guard providers.indices.contains(index) else { return }
-        if let url = webView?.url, isProviderHost(url.host, provider: providers[selectedIndex]) {
-            visitedURLs[providers[selectedIndex].url.absoluteString] = url
+        guard providers.indices.contains(index), !disabledURLs.contains(providers[index].url.absoluteString), index != selectedIndex else { return }
+        prunePages()
+        let oldKey = chatURL.absoluteString
+        if let old = webView {
+            if let url = old.url, isProviderHost(url.host, provider: providers[selectedIndex]) { visitedURLs[oldKey] = url }
+            contentStack?.removeArrangedSubview(old)
+            old.removeFromSuperview()
+            parkedPages[oldKey] = ParkedPage(view: old, parkedAt: .now)
         }
         selectedIndex = index
-        UserDefaults.standard.set(providers[index].url.absoluteString, forKey: "selectedProvider")
-        providerPicker?.selectItem(withTag: index)
-        webView?.load(URLRequest(url: visitedURLs[chatURL.absoluteString] ?? chatURL))
+        UserDefaults.standard.set(chatURL.absoluteString, forKey: "selectedProvider")
+        if contentStack != nil {
+            let cached = parkedPages.removeValue(forKey: chatURL.absoluteString)
+            let next = cached?.view ?? makeWebView()
+            webView = next
+            contentStack?.addArrangedSubview(next)
+            if let resizeGrip { contentStack?.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
+            observePageColor(next)
+            if cached == nil { next.load(URLRequest(url: visitedURLs[chatURL.absoluteString] ?? chatURL)) }
+            panel?.makeFirstResponder(next)
+        }
+        crashReloads = []
+        reloadOnShow = false
+        refreshPicker()
+        prunePages()
     }
 
-    @objc private func providerChanged(_ sender: NSPopUpButton) { selectProvider(sender.selectedTag()) }
+    @objc private func providerChanged(_ sender: NSButton) { selectProvider(sender.tag) }
     @objc private func goBack(_ sender: Any?) { webView?.goBack() }
     @objc private func goForward(_ sender: Any?) { webView?.goForward() }
     @objc private func reloadPage(_ sender: Any?) { webView?.reload() }
@@ -124,58 +195,23 @@ final class QuickChatController: NSObject {
         return button
     }
 
-    func addProvider() {
-        let alert = NSAlert()
-        alert.messageText = "Add a Chat Provider"
-        alert.informativeText = "Enter a name and an HTTPS address for the provider."
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-        let name = NSTextField(string: "")
-        name.placeholderString = "Name"
-        let address = NSTextField(string: "https://")
-        address.placeholderString = "https://example.com"
-        let fields = NSStackView(views: [name, address])
-        fields.orientation = .vertical
-        fields.spacing = 8
-        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 54)
-        alert.accessoryView = fields
-        NSApp.activate()
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, let url = URL(string: address.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme?.lowercased() == "https", url.host != nil, url.user == nil, url.password == nil else {
-            let error = NSAlert(); error.messageText = "Enter a name and a valid HTTPS address."; error.runModal(); return
-        }
-        customProviders.append(Provider(name: title, url: url))
-        saveCustomProviders()
-        refreshPicker()
-        selectProvider(providers.count - 1)
-    }
-
-    func removeCustomProvider() {
-        guard selectedIndex >= Self.builtIns.count else {
-            let alert = NSAlert(); alert.messageText = "Select a custom provider first."; alert.runModal(); return
-        }
-        let alert = NSAlert()
-        alert.messageText = "Remove \(providers[selectedIndex].name)?"
-        alert.informativeText = "Website data is retained until you clear it."
-        alert.addButton(withTitle: "Remove"); alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        customProviders.remove(at: selectedIndex - Self.builtIns.count)
-        selectedIndex = 0
-        saveCustomProviders(); refreshPicker(); selectProvider(0)
-    }
-
     private func saveCustomProviders() {
         if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: "customProviders") }
     }
     private func refreshPicker() {
-        providerPicker?.removeAllItems()
+        guard let tabs = providerTabs else { return }
+        for view in tabs.arrangedSubviews { tabs.removeArrangedSubview(view); view.removeFromSuperview() }
         for (index, provider) in providers.enumerated() where !disabledURLs.contains(provider.url.absoluteString) {
-            providerPicker?.addItem(withTitle: provider.name)
-            providerPicker?.lastItem?.tag = index
+            let button = NSButton(title: provider.name, target: self, action: #selector(providerChanged(_:)))
+            button.tag = index
+            button.bezelStyle = .recessed
+            button.setButtonType(.pushOnPushOff)
+            button.state = index == selectedIndex ? .on : .off
+            button.font = .systemFont(ofSize: 12, weight: index == selectedIndex ? .semibold : .regular)
+            button.toolTip = provider.url.host
+            tabs.addArrangedSubview(button)
+            if index == selectedIndex { button.scrollToVisible(button.bounds) }
         }
-        providerPicker?.selectItem(withTag: selectedIndex)
     }
 
     private func isProviderHost(_ host: String?, provider: Provider) -> Bool {
@@ -184,10 +220,6 @@ final class QuickChatController: NSObject {
     }
     /// OpenAI's sign-in hosts (and their subdomains): where sign-in starts from a chatgpt.com page.
     private static let openAISignInHosts = ["auth.openai.com", "auth0.openai.com"]
-    /// Hidden longer than this while off ChatGPT (e.g. a help page reached from a sign-in page),
-    /// the panel goes back to the chat when shown. Shorter keeps a sign-in in progress, such as
-    /// while copying a code from another app.
-    private static let returnToChatAfter: TimeInterval = 5 * 60
     private static let safariUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
 
@@ -200,7 +232,7 @@ final class QuickChatController: NSObject {
     private var shownAt: Date?
     private var lostKeyAt: Date?
     private var keepFocusUntil: Date?
-    /// When the panel was last hidden (see `returnToChatAfter`).
+    /// When the panel was last hidden.
     private var hiddenAt: Date?
     private var workspaceObservers: [NSObjectProtocol] = []
     /// Where each in-flight download is being written, for "reveal in Finder" when it finishes.
@@ -235,16 +267,8 @@ final class QuickChatController: NSObject {
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
         if let webView {
-            // Off ChatGPT after a long hide: back to the chat, which also stands in for a crash retry.
-            let returnToChat = webView.url?.host.map { !isProviderHost($0, provider: providers[selectedIndex]) } == true
-                && hiddenAt.map { Date.now.timeIntervalSince($0) > Self.returnToChatAfter } == true
-            if returnToChat {
-                log.info("Off ChatGPT since the panel was hidden; going back to the chat")
-                webView.load(URLRequest(url: chatURL))
-            } else if reloadOnShow {
+            if reloadOnShow {
                 reload(webView)
-            }
-            if returnToChat || reloadOnShow {
                 reloadOnShow = false
                 crashReloads = []
             }
@@ -325,7 +349,12 @@ final class QuickChatController: NSObject {
         panel?.contentView = nil
         panel = nil
         webView = nil
-        providerPicker = nil
+        providerTabs = nil
+        contentStack = nil
+        evictionTimer?.invalidate()
+        evictionTimer = nil
+        for page in parkedPages.values { releasePage(page.view) }
+        parkedPages.removeAll()
         chromeView = nil
         pageColorObservation = nil
         crashReloads = []
@@ -345,6 +374,9 @@ final class QuickChatController: NSObject {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.log.info("Cleared Quick Chat website data")
+                for page in self.parkedPages.values { self.releasePage(page.view) }
+                self.parkedPages.removeAll()
+                self.prunePages()
                 self.visitedURLs.removeAll()
                 self.webView?.load(URLRequest(url: self.chatURL))
             }
@@ -373,16 +405,24 @@ final class QuickChatController: NSObject {
         header.wantsLayer = true
         header.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         chromeView = header
-        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
-        picker.controlSize = .regular
-        picker.isBordered = false
-        picker.font = .systemFont(ofSize: 13, weight: .semibold)
-        picker.target = self
-        picker.action = #selector(providerChanged(_:))
-        picker.translatesAutoresizingMaskIntoConstraints = false
-        picker.toolTip = "Choose a chat provider"
-        picker.setAccessibilityLabel("Chat provider")
-        header.addSubview(picker)
+        header.toolTip = "Drag to move · Double-click to expand"
+        let tabs = NSStackView()
+        tabs.orientation = .horizontal
+        tabs.spacing = 4
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasHorizontalScroller = true
+        scroll.scrollerStyle = .overlay
+        scroll.autohidesScrollers = true
+        scroll.documentView = tabs
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            tabs.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            tabs.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            tabs.heightAnchor.constraint(equalTo: scroll.contentView.heightAnchor)
+        ])
         let close = toolbarButton("xmark", label: "Hide Chat", action: #selector(dismissPanel(_:)))
         header.addSubview(close)
         let browser = toolbarButton("arrow.up.right.square", label: "Continue in Default Browser", action: #selector(openInBrowser(_:)))
@@ -394,14 +434,14 @@ final class QuickChatController: NSObject {
         NSLayoutConstraint.activate([
             close.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 14),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            picker.leadingAnchor.constraint(greaterThanOrEqualTo: close.trailingAnchor, constant: 12),
-            picker.centerXAnchor.constraint(equalTo: header.centerXAnchor),
-            picker.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            picker.trailingAnchor.constraint(lessThanOrEqualTo: controls.leadingAnchor, constant: -12),
+            scroll.leadingAnchor.constraint(equalTo: close.trailingAnchor, constant: 12),
+            scroll.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            scroll.heightAnchor.constraint(equalToConstant: 28),
+            scroll.trailingAnchor.constraint(equalTo: controls.leadingAnchor, constant: -16),
             controls.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
             controls.centerYAnchor.constraint(equalTo: header.centerYAnchor)
         ])
-        providerPicker = picker
+        providerTabs = tabs
         refreshPicker()
         let webView = makeWebView()
         let stack = NSStackView(views: [header, webView])
@@ -412,7 +452,23 @@ final class QuickChatController: NSObject {
         stack.wantsLayer = true
         stack.layer?.cornerRadius = 16
         stack.layer?.masksToBounds = true
+        contentStack = stack
         panel.contentView = stack
+        let grip = ResizeGrip()
+        resizeGrip = grip
+        grip.translatesAutoresizingMaskIntoConstraints = false
+        stack.addSubview(grip)
+        NSLayoutConstraint.activate([
+            grip.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -2),
+            grip.bottomAnchor.constraint(equalTo: stack.bottomAnchor, constant: -2),
+            grip.widthAnchor.constraint(equalToConstant: 18),
+            grip.heightAnchor.constraint(equalToConstant: 18)
+        ])
+        panel.onSelectProvider = { [weak self] offset in
+            guard let self else { return }
+            let enabled = self.providers.indices.filter { !self.disabledURLs.contains(self.providers[$0].url.absoluteString) }
+            if enabled.indices.contains(offset) { self.selectProvider(enabled[offset]) }
+        }
 
         if !panel.setFrameUsingName(QuickChatPanel.autosaveName) {
             center(panel)
@@ -445,9 +501,7 @@ final class QuickChatController: NSObject {
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        pageColorObservation = webView.observe(\.underPageBackgroundColor, options: [.initial, .new]) { [weak self] view, _ in
-            MainActor.assumeIsolated { self?.syncPageChrome(view) }
-        }
+        observePageColor(webView)
         return webView
     }
 
@@ -523,7 +577,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     /// `window.open` / target=_blank: opens in the panel, unless `opensInBrowser` sends it to the browser.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard let url = navigationAction.request.url else { return nil }
+        guard webView === self.webView, let url = navigationAction.request.url else { return nil }
         if Self.isGeneratedFile(url) {
             // window.open(blob:/data:) would otherwise replace the chat in the panel.
             webView.startDownload(using: navigationAction.request) { $0.delegate = self }
@@ -537,6 +591,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        guard webView === self.webView else { decisionHandler(.cancel); return }
         let url = navigationAction.request.url
         // <a download>, blob:/data: links: save the file instead of navigating (checked first, as
         // download links often point at file hosts that would otherwise open in the browser).
@@ -571,13 +626,19 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        focusComposer()
+        if webView === self.webView { focusComposer() }
     }
 
     /// macOS may kill the web content process (often while hidden, under memory pressure), which
     /// leaves the view blank; reload right away so it's ready before the panel is shown again.
     /// A page that keeps crashing it (3 times in a minute) is left until the panel is next shown.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else {
+            if let key = parkedPages.first(where: { $0.value.view === webView })?.key {
+                releasePage(webView); parkedPages.removeValue(forKey: key); prunePages()
+            }
+            return
+        }
         let now = Date()
         crashReloads.removeAll { now.timeIntervalSince($0) > 60 }
         guard crashReloads.count < 3 else {
@@ -597,7 +658,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping @MainActor ([URL]?) -> Void) {
-        guard let panel else { return completionHandler(nil) }
+        guard webView === self.webView, let panel else { return completionHandler(nil) }
         let open = NSOpenPanel()
         open.allowsMultipleSelection = parameters.allowsMultipleSelection
         open.canChooseDirectories = parameters.allowsDirectories
@@ -611,7 +672,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
                  decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
         // Camera and microphone alike: WebKit asks the user (per page load) on chatgpt.com only.
         // macOS's own TCC prompt also appears once per app (NSCamera/NSMicrophoneUsageDescription).
-        decisionHandler(origin.protocol == "https" && isProviderHost(origin.host, provider: providers[selectedIndex]) ? .prompt : .deny)
+        decisionHandler(webView === self.webView && origin.protocol == "https" && isProviderHost(origin.host, provider: providers[selectedIndex]) ? .prompt : .deny)
     }
 
     // MARK: Downloads (WKDownloadDelegate)
@@ -647,6 +708,7 @@ final class QuickChatPanel: NSPanel {
     /// companion chat and `minSize` (400), so the thread reads as a narrow column without the
     /// squat look of the new app's 470-wide window cut down to 560 tall.
     static let defaultSize = NSSize(width: 420, height: 560)
+    var onSelectProvider: ((Int) -> Void)?
     var onCancel: (() -> Void)?
     var onResignKey: (() -> Void)?
     /// ⌘[ / ⌘] while the panel is key: the browsers' Back and Forward.
@@ -869,6 +931,9 @@ final class QuickChatPanel: NSPanel {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if handleLocalShortcut(event) { return true }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+            if let text = event.charactersIgnoringModifiers, let number = Int(text), (1...9).contains(number) {
+                onSelectProvider?(number - 1); return true
+            }
             switch event.charactersIgnoringModifiers {
             case "w": onCancel?(); return true
             case "[": onGoBack?(); return true
@@ -889,6 +954,59 @@ private final class DraggableView: NSView {
             panel.titleBarDoubleClicked(event)
             return
         }
-        super.mouseDown(with: event)
+        window?.performDrag(with: event)
     }
 }
+
+/// Visible resize affordance for a borderless panel; keeps its top-left corner fixed.
+private final class ResizeGrip: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        toolTip = "Drag to resize"
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.secondaryLabelColor.withAlphaComponent(0.4).setStroke()
+        let path = NSBezierPath()
+        for offset: CGFloat in [4, 8, 12] {
+            path.move(to: NSPoint(x: bounds.maxX - offset, y: 3))
+            path.line(to: NSPoint(x: bounds.maxX - 3, y: offset))
+        }
+        path.stroke()
+    }
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        let original = window.frame
+        let start = NSEvent.mouseLocation
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { break }
+            let point = NSEvent.mouseLocation
+            let width = max(window.minSize.width, original.width + point.x - start.x)
+            let height = max(window.minSize.height, original.height - point.y + start.y)
+            window.setFrame(NSRect(x: original.minX, y: original.maxY - height, width: width, height: height), display: true)
+        }
+    }
+}
+
+#if DEBUG
+extension QuickChatController {
+    static func runCacheSelfTest() -> Bool {
+        _ = NSApplication.shared
+        let controller = QuickChatController()
+        let now = Date()
+        for index in 0..<5 {
+            controller.parkedPages[String(index)] = ParkedPage(view: WKWebView(), parkedAt: now.addingTimeInterval(-Double(index)))
+        }
+        controller.prunePages(at: now, minutes: 10)
+        guard Set(controller.parkedPages.keys) == Set(["0", "1", "2"]) else { return false }
+        controller.prunePages(at: now.addingTimeInterval(601), minutes: 10)
+        guard controller.parkedPages.isEmpty, controller.evictionTimer == nil else { return false }
+        controller.parkedPages["immediate"] = ParkedPage(view: WKWebView(), parkedAt: now)
+        controller.prunePages(at: now, minutes: 0)
+        guard controller.parkedPages.isEmpty, controller.evictionTimer == nil else { return false }
+        controller.tearDown()
+        print("Page cache tests passed: oldest-first capacity, expiry and immediate release")
+        return true
+    }
+}
+#endif

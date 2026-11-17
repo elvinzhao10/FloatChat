@@ -13,13 +13,26 @@ struct ChatSettingsView: View {
         let host: String
         let enabled: Bool
     }
+    @ObservedObject var fields: ChatSettingsFields
+    let retention: Int
+    let setRetention: (Int) -> Void
     let providers: [Row]
     let toggle: (Int) -> Void
     let add: (String, String) -> Bool
-    @ObservedObject private var fields = ChatSettingsFields()
 
     var body: some View {
         Form {
+            Section {
+                Picker("Keep inactive pages", selection: Binding(get: { retention }, set: { setRetention($0) })) {
+                    Text("Release immediately").tag(0)
+                    Text("1 minute").tag(1)
+                    Text("5 minutes").tag(5)
+                    Text("10 minutes").tag(10)
+                    Text("30 minutes").tag(30)
+                }
+                Text("Keeps drafts, scroll position and page history for up to three inactive websites. Older pages reload when reopened. macOS may reclaim pages under memory pressure.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: { Text("Page memory") }
             Section {
                 ForEach(providers) { provider in
                     Toggle(isOn: Binding(get: { provider.enabled }, set: { _ in toggle(provider.id) })) {
@@ -34,7 +47,7 @@ struct ChatSettingsView: View {
             Section("Add a website") {
                 TextField("Name", text: $fields.name)
                 TextField("https://example.com", text: $fields.address)
-                if fields.invalid { Text("Enter a name and a valid HTTPS address.").foregroundStyle(.red).font(.caption) }
+                if fields.invalid { Text("Enter a name and a unique HTTPS address.").foregroundStyle(.red).font(.caption) }
                 Button("Add Website") {
                     fields.invalid = !add(fields.name.trimmingCharacters(in: .whitespacesAndNewlines), fields.address.trimmingCharacters(in: .whitespacesAndNewlines))
                     if !fields.invalid { fields.name = ""; fields.address = "" }

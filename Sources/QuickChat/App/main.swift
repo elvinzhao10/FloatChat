@@ -2,6 +2,9 @@ import AppKit
 
 MainActor.assumeIsolated {
     #if DEBUG
+    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "pages" {
+        exit(QuickChatController.runCacheSelfTest() ? 0 : 1)
+    }
     if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "keymap" {
         exit(KeymapSelfTest.run() ? 0 : 1)
     }

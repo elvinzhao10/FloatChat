@@ -8,7 +8,7 @@ import AppKit
 @MainActor
 final class QuickChatFeature: Feature {
     let id = "miniChat" // pre-rename id; persisted, keep
-    var title: String { "Quick Chat" }
+    var title: String { "Enable Global Shortcut" }
     private(set) var isEnabled = false
 
     private let log = Log.make("QuickChat")
@@ -66,7 +66,7 @@ final class QuickChatFeature: Feature {
         for item in chat.providerMenuItems() { submenu.addItem(item) }
         websites.submenu = submenu
         items.append(websites)
-        guard isEnabled else { return items }
+
         items += [
             ActionMenuItem("Change Shortcut… (\(shortcut.displayString))") { [weak self] in self?.editShortcut() },
             ActionMenuItem("Clear All Provider Website Data…") { [weak self] in self?.chat.signOut() },
