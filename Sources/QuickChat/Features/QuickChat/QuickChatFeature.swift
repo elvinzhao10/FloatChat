@@ -54,11 +54,18 @@ final class QuickChatFeature: Feature {
 
     private var takesMiniShortcut: Bool { showMini.reasons.contains(.quickChatShortcut) }
 
+    func show() { chat.show() }
+
     func menuItems() -> [NSMenuItem] {
-        guard isEnabled else { return [] }
         var items: [NSMenuItem] = [
+            ActionMenuItem("Open Chat") { [weak self] in self?.show() },
+        ]
+        guard isEnabled else { return items }
+        items += [
             ActionMenuItem("Change Shortcut… (\(shortcut.displayString))") { [weak self] in self?.editShortcut() },
-            ActionMenuItem("Sign Out of Quick Chat") { [weak self] in self?.chat.signOut() },
+            ActionMenuItem("Add Provider…") { [weak self] in self?.chat.addProvider() },
+            ActionMenuItem("Remove Selected Custom Provider…") { [weak self] in self?.chat.removeCustomProvider() },
+            ActionMenuItem("Clear All Provider Website Data…") { [weak self] in self?.chat.signOut() },
         ]
         if takesMiniShortcut, let restart = showMini.restartMenuItem() { items.insert(restart, at: 0) }
         return items

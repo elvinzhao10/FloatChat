@@ -1,4 +1,4 @@
-APP_NAME := Quick Chat
+APP_NAME := Quick Chat Omni
 APP      := build/$(APP_NAME).app
 PREFIX   ?= /Applications
 DEST     := $(PREFIX)/$(APP_NAME).app

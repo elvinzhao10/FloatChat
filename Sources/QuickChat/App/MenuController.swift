@@ -24,7 +24,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     private func rebuild() {
         menu.removeAllItems()
 
-        let header = NSMenuItem(title: "Quick Chat", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "Quick Chat Omni", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
@@ -53,7 +53,7 @@ final class MenuController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Quick Chat",
+        menu.addItem(NSMenuItem(title: "Quit Quick Chat Omni",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: ""))
     }

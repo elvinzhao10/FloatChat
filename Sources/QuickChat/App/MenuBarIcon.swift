@@ -36,7 +36,7 @@ enum MenuBarIcon {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Quick Chat"
+        image.accessibilityDescription = "Quick Chat Omni"
         return image
     }
 

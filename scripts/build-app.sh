@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds "build/Quick Chat.app" from the SwiftPM executable and codesigns it.
+# Builds "build/Quick Chat Omni.app" from the SwiftPM executable and codesigns it.
 #
 # Environment overrides:
-#   BUNDLE_ID          CFBundleIdentifier            (default: dev.shuaibird.quickchat)
+#   BUNDLE_ID          CFBundleIdentifier            (default: dev.quickchat.omni)
 #   VERSION            CFBundleShortVersionString    (default: latest git tag minus "v", else 0.0.0-dev)
 #   BUILD_NUMBER       CFBundleVersion               (default: git commit count, else 1)
 #   UNIVERSAL=1        build arm64 + x86_64 instead of the host architecture only
@@ -12,16 +12,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="Quick Chat"
+APP_NAME="Quick Chat Omni"
 EXECUTABLE="QuickChat" # SwiftPM product name
-BUNDLE_ID="${BUNDLE_ID:-dev.shuaibird.quickchat}"
+BUNDLE_ID="${BUNDLE_ID:-dev.quickchat.omni}"
 VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || true)}"
 VERSION="${VERSION#v}"
 VERSION="${VERSION:-0.0.0-dev}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 APP="build/${APP_NAME}.app"
 
-SWIFT_FLAGS="-c release"
+SWIFT_FLAGS="-c release ${SWIFT_BUILD_FLAGS:-}"
 if [ "${UNIVERSAL:-0}" = "1" ]; then
   SWIFT_FLAGS="${SWIFT_FLAGS} --arch arm64 --arch x86_64"
 fi
@@ -54,9 +54,9 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>${APP_NAME} uses the microphone for ChatGPT voice input.</string>
-  <key>NSCameraUsageDescription</key><string>${APP_NAME} uses the camera when you take a photo or share video in ChatGPT.</string>
-  <key>NSDownloadsFolderUsageDescription</key><string>${APP_NAME} saves files you download from ChatGPT to your Downloads folder.</string>
+  <key>NSMicrophoneUsageDescription</key><string>${APP_NAME} uses the microphone for voice input.</string>
+  <key>NSCameraUsageDescription</key><string>${APP_NAME} uses the camera when you take a photo or share video in a chat.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>${APP_NAME} saves files you download from a chat to your Downloads folder.</string>
 </dict>
 </plist>
 PLIST

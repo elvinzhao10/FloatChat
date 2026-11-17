@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuController = controller
 
         manager.start()
+        (manager.features.first as? QuickChatFeature)?.show()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

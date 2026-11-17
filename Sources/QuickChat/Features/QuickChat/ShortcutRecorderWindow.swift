@@ -1,7 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Small window for choosing Quick Chat's shortcuts: the global toggle and the local
+/// Small window for choosing Quick Chat Omni's shortcuts: the global toggle and the local
 /// (panel-focused) Reset Window Size and Maximize. The caller unregisters its global hotkey while this is
 /// open (otherwise the current shortcut would be swallowed).
 @MainActor
@@ -47,7 +47,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
         showRules()
 
         hint.stringValue = miniShortcut.map {
-            "ChatGPT's Show Mini uses \($0).\nChoosing the same shortcut turns Show Mini off while Quick Chat is on."
+            "ChatGPT's Show Mini uses \($0).\nChoosing the same shortcut turns Show Mini off while Quick Chat Omni is on."
         } ?? "ChatGPT's Show Mini has no shortcut,\nso any shortcut is free."
         let window = self.window ?? makeWindow()
         self.window = window
@@ -91,7 +91,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
             return "\(new.displayString) is \(combo.name).\nPick another combo."
         }
         let names: [(RecorderField, String)] = [
-            (recorder, "the Quick Chat shortcut"), (resetSizeRecorder, "Reset Window Size"), (maximizeRecorder, "Maximize"),
+            (recorder, "the Quick Chat Omni shortcut"), (resetSizeRecorder, "Reset Window Size"), (maximizeRecorder, "Maximize"),
         ]
         guard let name = names.first(where: { $0.0 !== field && $0.0.shortcut == new })?.1 else { return nil }
         return "\(new.displayString) is already \(name).\nPick another combo, or change that one first."
@@ -100,20 +100,20 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
     private func makeWindow() -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 424, height: 292), // refit in show()
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Quick Chat Shortcuts"
+        window.title = "Quick Chat Omni Shortcuts"
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.delegate = self
 
-        let label = Self.sectionLabel("Quick Chat", detail: "Opens Quick Chat from any app.")
+        let label = Self.sectionLabel("Quick Chat Omni", detail: "Opens Quick Chat Omni from any app.")
         let reset = NSButton(title: "Reset to ⌥Space", target: self, action: #selector(resetToDefault))
         let row = NSStackView(views: [recorder, reset])
         let resetSizeLabel = Self.sectionLabel("Reset Window Size",
-                                               detail: "Works only while Quick Chat is focused.")
+                                               detail: "Works only while Quick Chat Omni is focused.")
         let resetSizeReset = NSButton(title: "Reset to ⌘O", target: self, action: #selector(resetResetSizeToDefault))
         let resetSizeRow = NSStackView(views: [resetSizeRecorder, resetSizeReset])
         let maximizeLabel = Self.sectionLabel("Maximize / Restore Size",
-                                              detail: "Works only while Quick Chat is focused.")
+                                              detail: "Works only while Quick Chat Omni is focused.")
         let maximizeReset = NSButton(title: "Reset to ⌘F", target: self, action: #selector(resetMaximizeToDefault))
         let maximizeRow = NSStackView(views: [maximizeRecorder, maximizeReset])
         for button in [reset, resetSizeReset, maximizeReset] {

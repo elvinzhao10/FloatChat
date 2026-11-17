@@ -5,7 +5,112 @@ import WebKit
 /// web view, which uses its compact layout at this width.
 @MainActor
 final class QuickChatController: NSObject {
-    private static let chatURL = URL(string: "https://chatgpt.com/")!
+    private struct Provider: Codable {
+        var name: String
+        var url: URL
+    }
+    private static let builtIns = [
+        Provider(name: "ChatGPT", url: URL(string: "https://chatgpt.com/")!),
+        Provider(name: "Claude", url: URL(string: "https://claude.ai/")!),
+        Provider(name: "DeepSeek", url: URL(string: "https://chat.deepseek.com/")!),
+        Provider(name: "Kimi", url: URL(string: "https://www.kimi.com/")!),
+        Provider(name: "Gemini", url: URL(string: "https://gemini.google.com/")!),
+        Provider(name: "Perplexity", url: URL(string: "https://www.perplexity.ai/")!),
+        Provider(name: "Copilot", url: URL(string: "https://copilot.microsoft.com/")!),
+        Provider(name: "Grok", url: URL(string: "https://grok.com/")!),
+    ]
+    private var customProviders: [Provider] = {
+        guard let data = UserDefaults.standard.data(forKey: "customProviders"),
+              let providers = try? JSONDecoder().decode([Provider].self, from: data) else { return [] }
+        return providers.filter { $0.url.scheme?.lowercased() == "https" && $0.url.host != nil }
+    }()
+    private var providers: [Provider] { Self.builtIns + customProviders }
+    private var selectedIndex = 0
+    private var visitedURLs: [String: URL] = [:]
+    private var providerPicker: NSPopUpButton?
+    private var chatURL: URL { providers[selectedIndex].url }
+
+    private func selectProvider(_ index: Int) {
+        guard providers.indices.contains(index) else { return }
+        if let url = webView?.url, isProviderHost(url.host, provider: providers[selectedIndex]) {
+            visitedURLs[providers[selectedIndex].url.absoluteString] = url
+        }
+        selectedIndex = index
+        UserDefaults.standard.set(providers[index].url.absoluteString, forKey: "selectedProvider")
+        providerPicker?.selectItem(at: index)
+        webView?.load(URLRequest(url: visitedURLs[chatURL.absoluteString] ?? chatURL))
+    }
+
+    @objc private func providerChanged(_ sender: NSPopUpButton) { selectProvider(sender.indexOfSelectedItem) }
+    @objc private func goBack(_ sender: Any?) { webView?.goBack() }
+    @objc private func goForward(_ sender: Any?) { webView?.goForward() }
+    @objc private func reloadPage(_ sender: Any?) { webView?.reload() }
+
+    private func toolbarButton(_ symbol: String, label: String, action: Selector) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+        button.bezelStyle = .texturedRounded
+        button.isBordered = false
+        button.controlSize = .small
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }
+
+    func addProvider() {
+        let alert = NSAlert()
+        alert.messageText = "Add a Chat Provider"
+        alert.informativeText = "Enter a name and an HTTPS address for the provider."
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        let name = NSTextField(string: "")
+        name.placeholderString = "Name"
+        let address = NSTextField(string: "https://")
+        address.placeholderString = "https://example.com"
+        let fields = NSStackView(views: [name, address])
+        fields.orientation = .vertical
+        fields.spacing = 8
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 54)
+        alert.accessoryView = fields
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, let url = URL(string: address.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https", url.host != nil, url.user == nil, url.password == nil else {
+            let error = NSAlert(); error.messageText = "Enter a name and a valid HTTPS address."; error.runModal(); return
+        }
+        customProviders.append(Provider(name: title, url: url))
+        saveCustomProviders()
+        refreshPicker()
+        selectProvider(providers.count - 1)
+    }
+
+    func removeCustomProvider() {
+        guard selectedIndex >= Self.builtIns.count else {
+            let alert = NSAlert(); alert.messageText = "Select a custom provider first."; alert.runModal(); return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Remove \(providers[selectedIndex].name)?"
+        alert.informativeText = "Website data is retained until you clear it."
+        alert.addButton(withTitle: "Remove"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        customProviders.remove(at: selectedIndex - Self.builtIns.count)
+        selectedIndex = 0
+        saveCustomProviders(); refreshPicker(); selectProvider(0)
+    }
+
+    private func saveCustomProviders() {
+        if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: "customProviders") }
+    }
+    private func refreshPicker() {
+        providerPicker?.removeAllItems()
+        providerPicker?.addItems(withTitles: providers.map(\.name))
+        providerPicker?.selectItem(at: selectedIndex)
+    }
+    private func isProviderHost(_ host: String?, provider: Provider) -> Bool {
+        guard let host = host?.lowercased(), let base = provider.url.host?.lowercased() else { return false }
+        return host == base || host.hasSuffix("." + base)
+    }
     /// OpenAI's sign-in hosts (and their subdomains): where sign-in starts from a chatgpt.com page.
     private static let openAISignInHosts = ["auth.openai.com", "auth0.openai.com"]
     /// Hidden longer than this while off ChatGPT (e.g. a help page reached from a sign-in page),
@@ -60,11 +165,11 @@ final class QuickChatController: NSObject {
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
         if let webView {
             // Off ChatGPT after a long hide: back to the chat, which also stands in for a crash retry.
-            let returnToChat = webView.url?.host.map { !Self.isChatGPTHost($0) } == true
+            let returnToChat = webView.url?.host.map { !isProviderHost($0, provider: providers[selectedIndex]) } == true
                 && hiddenAt.map { Date.now.timeIntervalSince($0) > Self.returnToChatAfter } == true
             if returnToChat {
                 log.info("Off ChatGPT since the panel was hidden; going back to the chat")
-                webView.load(URLRequest(url: Self.chatURL))
+                webView.load(URLRequest(url: chatURL))
             } else if reloadOnShow {
                 reload(webView)
             }
@@ -149,17 +254,26 @@ final class QuickChatController: NSObject {
         panel?.contentView = nil
         panel = nil
         webView = nil
+        providerPicker = nil
         crashReloads = []
         reloadOnShow = false
     }
 
     /// Signs out by clearing the panel's website data (cookies, storage).
     func signOut() {
+        let alert = NSAlert()
+        alert.messageText = "Clear all provider website data?"
+        alert.informativeText = "This signs you out of every provider in Quick Chat Omni and removes their local website data."
+        alert.addButton(withTitle: "Clear Data")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         let store = WKWebsiteDataStore.default()
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { [weak self] in
             MainActor.assumeIsolated {
-                self?.log.info("Cleared Quick Chat website data")
-                self?.webView?.load(URLRequest(url: Self.chatURL))
+                guard let self else { return }
+                self.log.info("Cleared Quick Chat website data")
+                self.visitedURLs.removeAll()
+                self.webView?.load(URLRequest(url: self.chatURL))
             }
         }
     }
@@ -179,13 +293,41 @@ final class QuickChatController: NSObject {
         panel.resetSizeShortcut = resetSizeShortcut
         panel.maximizeShortcut = maximizeShortcut
 
-        let header = DraggableView() // drag strip under the transparent title bar
+        if let saved = UserDefaults.standard.string(forKey: "selectedProvider"),
+           let index = providers.firstIndex(where: { $0.url.absoluteString == saved }) { selectedIndex = index }
+        let header = DraggableView() // native drag strip and provider picker
+        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
+        picker.controlSize = .small
+        picker.target = self
+        picker.action = #selector(providerChanged(_:))
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.toolTip = "Choose a chat provider"
+        picker.setAccessibilityLabel("Chat provider")
+        header.addSubview(picker)
+        let back = toolbarButton("chevron.left", label: "Back", action: #selector(goBack(_:)))
+        let forward = toolbarButton("chevron.right", label: "Forward", action: #selector(goForward(_:)))
+        let reload = toolbarButton("arrow.clockwise", label: "Reload", action: #selector(reloadPage(_:)))
+        let controls = NSStackView(views: [back, forward, reload])
+        controls.orientation = .horizontal
+        controls.spacing = 8
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(controls)
+        NSLayoutConstraint.activate([
+            picker.leadingAnchor.constraint(greaterThanOrEqualTo: header.leadingAnchor, constant: 80),
+            picker.centerXAnchor.constraint(equalTo: header.centerXAnchor, constant: -12),
+            picker.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            picker.trailingAnchor.constraint(lessThanOrEqualTo: controls.leadingAnchor, constant: -8),
+            controls.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -12),
+            controls.centerYAnchor.constraint(equalTo: header.centerYAnchor)
+        ])
+        providerPicker = picker
+        refreshPicker()
         let webView = makeWebView()
         let stack = NSStackView(views: [header, webView])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.edgeInsets = NSEdgeInsets()
-        header.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        header.heightAnchor.constraint(equalToConstant: 38).isActive = true
         panel.contentView = stack
 
         if !panel.setFrameUsingName(QuickChatPanel.autosaveName) {
@@ -195,7 +337,7 @@ final class QuickChatController: NSObject {
 
         self.panel = panel
         self.webView = webView
-        webView.load(URLRequest(url: Self.chatURL))
+        webView.load(URLRequest(url: chatURL))
         return panel
     }
 
@@ -281,11 +423,11 @@ final class QuickChatController: NSObject {
     /// chatgpt.com, so a link from there that leaves ChatGPT (and isn't its sign-in) goes to the
     /// browser. Any other page in the panel is part of a sign-in flow (Google, Apple, Microsoft,
     /// SSO), whose links stay in the panel whatever host they use.
-    private static func opensInBrowser(_ url: URL?, from source: URL?) -> Bool {
-        guard let host = url?.host?.lowercased() else { return false } // about:blank, data:, etc.
-        guard let sourceHost = source?.host, isChatGPTHost(sourceHost) else { return false }
-        let isOpenAISignIn = openAISignInHosts.contains { host == $0 || host.hasSuffix("." + $0) }
-        return !isChatGPTHost(host) && !isOpenAISignIn
+    private func opensInBrowser(_ url: URL?, from source: URL?) -> Bool {
+        guard let host = url?.host?.lowercased(), isProviderHost(source?.host, provider: providers[selectedIndex]) else { return false }
+        let authHosts = Self.openAISignInHosts + ["accounts.google.com", "appleid.apple.com", "login.microsoftonline.com", "login.live.com", "auth.deepseek.com", "auth.claude.ai"]
+        let isAuth = authHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+        return !isProviderHost(host, provider: providers[selectedIndex]) && !isAuth
     }
 }
 
@@ -299,7 +441,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         if Self.isGeneratedFile(url) {
             // window.open(blob:/data:) would otherwise replace the chat in the panel.
             webView.startDownload(using: navigationAction.request) { $0.delegate = self }
-        } else if Self.opensInBrowser(url, from: webView.url) {
+        } else if opensInBrowser(url, from: webView.url) {
             NSWorkspace.shared.open(url)
         } else {
             webView.load(navigationAction.request)
@@ -317,7 +459,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
             return
         }
         if navigationAction.targetFrame?.isMainFrame == true, navigationAction.navigationType == .linkActivated,
-           Self.opensInBrowser(url, from: webView.url), let url {
+           opensInBrowser(url, from: webView.url), let url {
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
             return
@@ -363,7 +505,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     private func reload(_ webView: WKWebView) {
-        if webView.url != nil { webView.reload() } else { webView.load(URLRequest(url: Self.chatURL)) }
+        if webView.url != nil { webView.reload() } else { webView.load(URLRequest(url: chatURL)) }
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
@@ -383,7 +525,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
                  decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
         // Camera and microphone alike: WebKit asks the user (per page load) on chatgpt.com only.
         // macOS's own TCC prompt also appears once per app (NSCamera/NSMicrophoneUsageDescription).
-        decisionHandler(origin.protocol == "https" && Self.isChatGPTHost(origin.host) ? .prompt : .deny)
+        decisionHandler(origin.protocol == "https" && isProviderHost(origin.host, provider: providers[selectedIndex]) ? .prompt : .deny)
     }
 
     // MARK: Downloads (WKDownloadDelegate)
@@ -456,7 +598,7 @@ final class QuickChatPanel: NSPanel {
         super.init(contentRect: contentRect,
                    styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                    backing: .buffered, defer: false)
-        title = "ChatGPT"
+        title = "Quick Chat Omni"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         // .fullScreenAuxiliary lets the panel show over another app's full-screen Space. Don't add

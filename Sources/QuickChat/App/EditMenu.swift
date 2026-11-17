@@ -2,7 +2,7 @@ import AppKit
 
 /// A main menu with the standard Edit commands. The app is menu-bar-only, so the menu is
 /// never shown, but AppKit routes ⌘C / ⌘V / ⌘X / ⌘A / ⌘Z through it to the focused view
-/// (e.g. Quick Chat's web view). Without it those shortcuts do nothing.
+/// (e.g. Quick Chat Omni's web view). Without it those shortcuts do nothing.
 @MainActor
 enum EditMenu {
     static func install() {
@@ -10,7 +10,7 @@ enum EditMenu {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Quick Chat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit Quick Chat Omni", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
 

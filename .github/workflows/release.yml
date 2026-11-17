@@ -51,7 +51,7 @@ jobs:
           {
             echo "VERSION=$VERSION"
             echo "PRERELEASE=$PRERELEASE"
-            echo "ZIP=Quick-Chat-$VERSION.zip"
+            echo "ZIP=Quick-Chat-Omni-$VERSION.zip"
           } >> "$GITHUB_ENV"
 
       - name: Build universal app (ad-hoc signed)
@@ -91,7 +91,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Quick-Chat-${{ env.VERSION }}
+          name: Quick-Chat-Omni-${{ env.VERSION }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
