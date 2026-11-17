@@ -2,6 +2,11 @@
 
 ## 0.3.2
 
+### Build 8
+
+- Instant chats and pinned conversations have separate retention timers with no count limit. Instant chats start fresh after expiry. Pins reopen the saved conversation.
+- Background translucency follows client-side conversation changes while keeping text opaque.
+
 ### Build 7
 
 - One continuous rounded panel surface. The translucency slider changes the background while preserving text and control opacity.

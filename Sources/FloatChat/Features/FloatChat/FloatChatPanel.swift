@@ -274,8 +274,9 @@ final class FloatChatController: NSObject {
                 return self.zoom(for: provider)
             },
             setZoom: { [weak self] key, value in self?.setZoom(value, for: key) },
-            retention: retentionMinutes,
-            setRetention: { [weak self] minutes in self?.retentionMinutes = minutes; self?.prunePages(); self?.updateSettings() },
+            instantRetention: retentionMinutes(forPinned: false),
+            pinnedRetention: retentionMinutes(forPinned: true),
+            setRetention: { [weak self] minutes, pinned in self?.setRetention(minutes, forPinned: pinned) },
             shortcutControls: shortcutControls?() ?? [],
             shortcuts: { [weak self] in self?.configureShortcut?() },
             reorder: { [weak self] offsets, destination in self?.reorderProviders(offsets, to: destination) },
@@ -463,16 +464,24 @@ final class FloatChatController: NSObject {
     private struct ParkedPage {
         let view: WKWebView
         let parkedAt: Date
+        let isPinned: Bool
         var failureURL: URL? = nil
     }
     private var parkedPages: [String: ParkedPage] = [:]
     private var evictionTimer: Timer?
-    private var retentionMinutes: Int {
-        get {
-            let value = preferences.object(forKey: "retentionMinutes") as? Int ?? 10
-            return [0, 1, 5, 10, 30].contains(value) ? value : 10
+    private func retentionMinutes(forPinned pinned: Bool) -> Int {
+        let legacy = preferences.object(forKey: "retentionMinutes") as? Int ?? 10
+        let value = pinned ? preferences.object(forKey: "pinnedRetentionMinutes") as? Int ?? legacy : legacy
+        return ChatSettingsView.retentionOptions.contains(value) ? value : 10
+    }
+
+    private func setRetention(_ minutes: Int, forPinned pinned: Bool) {
+        if !pinned, preferences.object(forKey: "pinnedRetentionMinutes") == nil {
+            preferences.set(retentionMinutes(forPinned: true), forKey: "pinnedRetentionMinutes")
         }
-        set { preferences.set(newValue, forKey: "retentionMinutes") }
+        preferences.set(minutes, forKey: pinned ? "pinnedRetentionMinutes" : "retentionMinutes")
+        prunePages()
+        updateSettings()
     }
     private func releasePage(_ view: WKWebView) {
         view.stopLoading()
@@ -481,30 +490,46 @@ final class FloatChatController: NSObject {
         view.navigationDelegate = nil
         view.uiDelegate = nil
     }
-    private func prunePages(at now: Date = .now, minutes: Int? = nil) {
-        let lifetime = Double(minutes ?? retentionMinutes) * 60
+    private func prunePages(at now: Date = .now) {
         evictionTimer?.invalidate()
         evictionTimer = nil
-        let cutoff = now.addingTimeInterval(-lifetime)
-        for (key, page) in parkedPages where page.parkedAt <= cutoff {
-            releasePage(page.view)
-            parkedPages.removeValue(forKey: key)
+        let instantLifetime = Double(retentionMinutes(forPinned: false)) * 60
+        let pinnedLifetime = Double(retentionMinutes(forPinned: true)) * 60
+        var nextExpiry: Date?
+        for (key, page) in parkedPages {
+            let expiry = page.parkedAt.addingTimeInterval(page.isPinned ? pinnedLifetime : instantLifetime)
+            if expiry <= now {
+                releasePage(page.view)
+                parkedPages.removeValue(forKey: key)
+            } else {
+                nextExpiry = min(nextExpiry ?? expiry, expiry)
+            }
         }
-        while parkedPages.count > 3, let oldest = parkedPages.min(by: { $0.value.parkedAt < $1.value.parkedAt }) {
-            releasePage(oldest.value.view)
-            parkedPages.removeValue(forKey: oldest.key)
-        }
-        if let oldest = parkedPages.values.map(\.parkedAt).min() {
-            let delay = max(0.1, oldest.addingTimeInterval(lifetime).timeIntervalSinceNow)
-            evictionTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+        if let nextExpiry {
+            evictionTimer = Timer.scheduledTimer(withTimeInterval: max(0.1, nextExpiry.timeIntervalSince(now)),
+                                                repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.prunePages() }
             }
             evictionTimer?.tolerance = 1
         }
     }
+
+    private func takeParkedPage(for provider: Provider) -> ParkedPage? {
+        guard let page = parkedPages.removeValue(forKey: provider.key) else { return nil }
+        if let pinnedURL = provider.conversationURL, let currentURL = page.view.url, currentURL != pinnedURL {
+            releasePage(page.view)
+            return nil
+        }
+        return page
+    }
     private func observePageColor(_ view: WKWebView) {
         pageURLObservation = view.observe(\.url, options: [.new]) { [weak self] view, _ in
-            MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage(); self?.updateWebsiteIdentity() } }
+            MainActor.assumeIsolated {
+                guard let self, self.webView === view else { return }
+                self.rememberPinnedPage()
+                self.updateWebsiteIdentity()
+                self.matchPageEdge(view)
+            }
         }
         pageTitleObservation = view.observe(\.title, options: [.new]) { [weak self] view, _ in
             MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage(); self?.updateTabPreviews() } }
@@ -548,41 +573,81 @@ final class FloatChatController: NSObject {
 
         let script = #"""
             (() => {
+                globalThis.floatChatCanvas?.stop();
                 const marker = 'data-floatchat-canvas';
-                let sheet = document.getElementById('floatchat-canvas');
-                if (sheet?.sheet) sheet.sheet.disabled = true;
-                document.querySelectorAll('[' + marker + ']').forEach(node => node.removeAttribute(marker));
-                const surfaces = new Set();
-                const colors = [0.08, 0.5, 0.92].map(position => {
-                    let sampled = null;
-                    let node = document.elementFromPoint(Math.floor(innerWidth * position), 1);
-                    while (node) {
-                        const color = getComputedStyle(node).backgroundColor;
-                        const size = node.getBoundingClientRect();
-                        const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
-                        const topStrip = size.width >= innerWidth * 0.98 && size.top <= 1 && size.bottom >= 1
-                            && size.height <= innerHeight * 0.25;
-                        if (canvas || topStrip) {
-                            surfaces.add(node);
-                            if (!sampled && /^rgb\(/.test(color)) sampled = color.match(/[0-9.]+/g)?.map(Number);
+                const translucent = \#(translucent);
+                let watched = new Set();
+                let pending = false;
+                let stopped = false;
+                const update = () => {
+                    let sheet = document.getElementById('floatchat-canvas');
+                    if (sheet?.sheet) sheet.sheet.disabled = true;
+                    document.querySelectorAll('[' + marker + ']').forEach(node => node.removeAttribute(marker));
+                    const surfaces = new Set();
+                    watched = new Set([document.documentElement, document.body]);
+                    const sample = y => [0.08, 0.5, 0.92].map(position => {
+                        let sampled = null;
+                        let node = document.elementFromPoint(Math.floor(innerWidth * position), y);
+                        while (node) {
+                            const size = node.getBoundingClientRect();
+                            const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
+                            const topStrip = size.width >= innerWidth * 0.98 && size.top <= 1 && size.bottom >= 1
+                                && size.height <= innerHeight * 0.25;
+                            if (canvas || topStrip) {
+                                watched.add(node);
+                                surfaces.add(node);
+                                const color = getComputedStyle(node).backgroundColor;
+                                if (!sampled && /^rgb\(/.test(color)) sampled = color.match(/[0-9.]+/g)?.map(Number);
+                            }
+                            node = node.parentElement;
                         }
-                        node = node.parentElement;
+                        return sampled;
+                    });
+                    const top = sample(1);
+                    const middle = translucent ? sample(Math.floor(innerHeight * 0.42)) : [];
+                    if (translucent) {
+                        sample(Math.floor(innerHeight * 0.75));
+                        for (const surface of surfaces) surface.setAttribute(marker, '');
+                        if (!sheet) {
+                            sheet = document.createElement('style');
+                            sheet.id = 'floatchat-canvas';
+                            sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }';
+                            (document.head || document.documentElement)?.append(sheet);
+                        }
+                        if (sheet.sheet) sheet.sheet.disabled = false;
+                    } else {
+                        sheet?.remove();
                     }
-                    return sampled;
-                });
-                if (\#(translucent)) {
-                    for (const surface of surfaces) surface.setAttribute(marker, '');
-                    if (!sheet) {
-                        sheet = document.createElement('style');
-                        sheet.id = 'floatchat-canvas';
-                        sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }';
-                        (document.head || document.documentElement)?.append(sheet);
-                    }
-                    if (sheet.sheet) sheet.sheet.disabled = false;
+                    const consensus = colors => colors.find(color =>
+                        color && colors.filter(other => String(other) === String(color)).length > 1);
+                    return consensus(middle) ?? consensus(top) ?? null;
+                };
+                const color = update();
+                if (translucent && document.documentElement) {
+                    const schedule = () => {
+                        if (pending) return;
+                        pending = true;
+                        queueMicrotask(() => {
+                            pending = false;
+                            if (!stopped) update();
+                        });
+                    };
+                    const observer = new MutationObserver(records => {
+                        if (records.some(record => watched.has(record.target))) schedule();
+                    });
+                    observer.observe(document.documentElement, {
+                        childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style']
+                    });
+                    window.addEventListener('resize', schedule);
+                    globalThis.floatChatCanvas = { stop() {
+                        observer.disconnect();
+                        window.removeEventListener('resize', schedule);
+                        stopped = true;
+                    }};
                 } else {
-                    sheet?.remove();
+                    delete globalThis.floatChatCanvas;
                 }
-                return colors.find(color => color && colors.filter(other => String(other) === String(color)).length > 1) ?? null;
+                return color;
             })()
             """#
         view.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self, weak view] result in
@@ -610,15 +675,18 @@ final class FloatChatController: NSObject {
 
     private func parkActivePage() {
         guard let view = webView else { return }
-        let key = providers[selectedIndex].key
+        let provider = providers[selectedIndex]
         stopTrackingPageLoad()
+        if panelTranslucency > 0 {
+            view.evaluateJavaScript("globalThis.floatChatCanvas?.stop()", in: nil, in: .defaultClient, completionHandler: nil)
+        }
         panel?.detachKeyboardFromPage(view)
         contentStack?.removeArrangedSubview(view)
         view.removeFromSuperview()
         view.setAllMediaPlaybackSuspended(true)
         view.setMicrophoneCaptureState(.none, completionHandler: nil)
         view.setCameraCaptureState(.none, completionHandler: nil)
-        parkedPages[key] = ParkedPage(view: view, parkedAt: .now, failureURL: failureURL)
+        parkedPages[provider.key] = ParkedPage(view: view, parkedAt: .now, isPinned: provider.isPinned, failureURL: failureURL)
         webView = nil
         pageColorObservation = nil
         pageURLObservation = nil
@@ -628,7 +696,7 @@ final class FloatChatController: NSObject {
     private func attachSelectedPage() {
         guard webView == nil, let contentStack else { return }
         prunePages()
-        let cached = parkedPages.removeValue(forKey: providers[selectedIndex].key)
+        let cached = takeParkedPage(for: providers[selectedIndex])
         let view = cached?.view ?? makeWebView()
         webView = view
         failureURL = cached?.failureURL
@@ -980,7 +1048,6 @@ final class FloatChatController: NSObject {
     /// Recent automatic reloads after the web content process died, to stop a crash loop.
     private var crashReloads: [Date] = []
     private var connectivity: NWPathMonitor?
-    private var memoryPressure: DispatchSourceMemoryPressure?
     private var offline = false
     private var slowPageTimer: Timer?
     private var slowPage = false
@@ -999,12 +1066,6 @@ final class FloatChatController: NSObject {
         }
         monitor.start(queue: .main)
         connectivity = monitor
-        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: .critical, queue: .main)
-        pressure.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.prunePages(minutes: 0) }
-        }
-        pressure.activate()
-        memoryPressure = pressure
     }
 
     private func trackPageLoad(_ view: WKWebView) {
@@ -1138,8 +1199,6 @@ final class FloatChatController: NSObject {
         stopTrackingPageLoad()
         connectivity?.cancel()
         connectivity = nil
-        memoryPressure?.cancel()
-        memoryPressure = nil
         offline = false
         NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         failureURL = nil
@@ -2141,15 +2200,15 @@ extension FloatChatController {
         let first = controller.selectedIndex
         let firstKey = controller.providers[first].key
         let secondKey = controller.providers[1].key
-        controller.parkedPages[firstKey] = ParkedPage(view: original, parkedAt: .now)
-        controller.parkedPages[secondKey] = ParkedPage(view: alternate, parkedAt: .now)
+        controller.parkedPages[firstKey] = ParkedPage(view: original, parkedAt: .now, isPinned: false)
+        controller.parkedPages[secondKey] = ParkedPage(view: alternate, parkedAt: .now, isPinned: false)
         panel.makeKeyAndOrderFront(nil)
         controller.attachSelectedPage()
         guard controller.webView === original, panel.isVisible else { return false }
 
         print("Checking fixture load")
         let fixture = "<form onsubmit='sent++; return false'><textarea id='draft'></textarea><button>Send</button></form><script>let sent = 0;</script>"
-        original.loadHTMLString(fixture, baseURL: nil)
+        original.loadHTMLString(fixture, baseURL: URL(string: "https://example.com/"))
         alternate.loadHTMLString(fixture, baseURL: nil)
         func evaluate(_ script: String, in page: WKWebView) -> String? {
             var result: String?
@@ -2174,10 +2233,10 @@ extension FloatChatController {
             panel.sendEvent(event)
             return true
         }
-        func waitForValue(_ expected: String, in page: WKWebView) -> Bool {
+        func waitForValue(_ expected: String, in page: WKWebView, script: String? = nil) -> Bool {
             let deadline = Date.now.addingTimeInterval(3)
             repeat {
-                if evaluate(value, in: page) == expected { return true }
+                if evaluate(script ?? value, in: page) == expected { return true }
                 RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
             } while Date.now < deadline
             return false
@@ -2193,6 +2252,21 @@ extension FloatChatController {
         guard controller.webView === original,
               typeTestKey(), waitForValue("测试草稿q:0", in: original),
               evaluate(value, in: alternate) == "q:0" else { return false }
+
+        print("Checking translucency after a client-side conversation layout change")
+        if original.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
+            controller.setPanelTranslucency(32)
+            let canvasStyle = "position:fixed;inset:0;background-color:rgb(20,30,40)"
+            let opening = "document.body.insertAdjacentHTML('beforeend', '<main id=canvas style=\"\(canvasStyle)\"><h1>New chat</h1></main>'); 'done'"
+            let background = "getComputedStyle(document.querySelector('#canvas')).backgroundColor + ':' + getComputedStyle(document.querySelector('#canvas h1')).opacity"
+            guard evaluate(opening, in: original) == "done",
+                  waitForValue("rgba(0, 0, 0, 0):1", in: original, script: background) else { return false }
+            let conversation = "document.querySelector('#canvas').outerHTML = '<main id=canvas style=\"\(canvasStyle)\"><h1>Conversation</h1></main>'; 'done'"
+            guard evaluate(conversation, in: original) == "done",
+                  waitForValue("rgba(0, 0, 0, 0):1", in: original, script: background) else { return false }
+            controller.setPanelTranslucency(0)
+            guard waitForValue("rgb(20, 30, 40):1", in: original, script: background) else { return false }
+        }
 
         print("Checking independent Settings and chat windows")
         defaults.set(true, forKey: "hideOnClickAway")
@@ -2223,10 +2297,22 @@ extension FloatChatController {
         controller.failureURL = nil
         guard controller.retryURL == nil else { return false }
         print("Checking immediate release")
-        controller.retentionMinutes = 0
+        controller.setRetention(0, forPinned: false)
         controller.hide(restoreFocus: false)
         guard controller.webView == nil, controller.parkedPages.isEmpty,
               controller.evictionTimer == nil else { return false }
+
+        print("Checking that a pin restores its saved conversation")
+        guard let fixtureURL = original.url else { return false }
+        var pin = Provider(name: "Fixture", url: fixtureURL)
+        pin.sessionID = "pinned-test"
+        pin.pinned = true
+        pin.conversationURL = fixtureURL
+        controller.parkedPages[pin.key] = ParkedPage(view: original, parkedAt: .now, isPinned: true)
+        guard controller.takeParkedPage(for: pin)?.view === original else { return false }
+        pin.conversationURL = fixtureURL.appendingPathComponent("saved-conversation")
+        controller.parkedPages[pin.key] = ParkedPage(view: original, parkedAt: .now, isPinned: true)
+        guard controller.takeParkedPage(for: pin) == nil else { return false }
 
         print("Checking frame recovery")
         panel.setFrameOrigin(NSPoint(x: 60_000, y: 60_000))
@@ -2304,27 +2390,36 @@ extension FloatChatController {
         controller.deleteProvider(controller.providers.firstIndex(where: { $0.key == secondPin.key })!)
         defaults.set(false, forKey: "pinnedFirst")
         guard !controller.providers[controller.enabledTabIndices[0]].isPinned else { return false }
-        controller.parkedPages[instantKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast)
-        controller.parkedPages[pinnedKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast)
-        controller.prunePages(minutes: 0)
+        controller.parkedPages[instantKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast, isPinned: false)
+        controller.parkedPages[pinnedKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast, isPinned: true)
+        controller.prunePages()
+        guard controller.chatURL == sessionURL else { return false }
         let hiddenPin = controller.providers.firstIndex(where: { $0.key == pinnedKey })!
         controller.toggleProvider(hiddenPin)
         let beforeUnpin = controller.providers[controller.selectedIndex].key
         controller.unpinProvider(hiddenPin)
         guard controller.savedSessions.isEmpty, controller.providers[controller.selectedIndex].key == beforeUnpin else { return false }
         let now = Date()
-        for index in 0..<5 {
-            controller.parkedPages[String(index)] = ParkedPage(view: WKWebView(), parkedAt: now.addingTimeInterval(-Double(index)))
+        defaults.set(5, forKey: "retentionMinutes")
+        guard controller.retentionMinutes(forPinned: true) == 5 else { return false }
+        controller.setRetention(1, forPinned: false)
+        guard controller.retentionMinutes(forPinned: false) == 1,
+              controller.retentionMinutes(forPinned: true) == 5 else { return false }
+        for index in 0..<6 {
+            controller.parkedPages[String(index)] = ParkedPage(view: WKWebView(), parkedAt: now, isPinned: index == 5)
         }
-        controller.prunePages(at: now, minutes: 10)
-        guard Set(controller.parkedPages.keys) == Set(["0", "1", "2"]) else { return false }
-        controller.prunePages(at: now.addingTimeInterval(601), minutes: 10)
+        controller.prunePages(at: now.addingTimeInterval(59))
+        guard controller.parkedPages.count == 6 else { return false }
+        controller.prunePages(at: now.addingTimeInterval(60))
+        guard Set(controller.parkedPages.keys) == Set(["5"]) else { return false }
+        controller.prunePages(at: now.addingTimeInterval(300))
         guard controller.parkedPages.isEmpty, controller.evictionTimer == nil else { return false }
-        controller.parkedPages["immediate"] = ParkedPage(view: WKWebView(), parkedAt: now)
-        controller.prunePages(at: now, minutes: 0)
+        controller.setRetention(0, forPinned: true)
+        controller.parkedPages["immediate"] = ParkedPage(view: WKWebView(), parkedAt: now, isPinned: true)
+        controller.prunePages(at: now)
         guard controller.parkedPages.isEmpty, controller.evictionTimer == nil else { return false }
         controller.tearDown()
-        print("Checks passed: provider ordering and persistence, URL validation, duplicate rejection, active-provider fallback, deletion and re-adding, independent sessions, pinned URL persistence, group ordering, language headers, unpinning, cache capacity, expiry and immediate release")
+        print("Checks passed: provider ordering and persistence, URL validation, duplicate rejection, active-provider fallback, deletion and re-adding, independent sessions, pinned URL persistence, group ordering, language headers, unpinning, independent timed retention without a count limit, and immediate release")
         return true
     }
 }

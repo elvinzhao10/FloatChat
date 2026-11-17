@@ -49,7 +49,7 @@ Settings can stay open beside the floating window. In **Chats**, drag to reorder
 
 ## Page retention and sign-ins
 
-FloatChat uses native Swift, AppKit, and WebKit. It keeps up to three hidden or inactive pages in memory for up to 10 minutes by default. Choose **Release immediately** in **Settings → General** to free inactive pages sooner. Under critical memory pressure, FloatChat releases inactive pages early. Releasing a page may discard unsent text or interrupt a reply. Pinned links and website sign-ins persist.
+FloatChat keeps live pages while they are inactive. Under **Settings → General → Keep inactive chats**, choose a duration for instant chats and another for pins. The timer starts when you leave a chat or hide the window. After expiry, an instant chat reopens at its starting page and a pin reopens its saved conversation. Sign-ins are kept. Unsaved drafts can be lost when WebKit releases a page.
 
 FloatChat and your default browser maintain separate sign-in sessions. Hiding or removing a website keeps its local login. Custom icons are fetched directly from the website over HTTPS in a separate session without chat cookies.
 

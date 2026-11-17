@@ -52,8 +52,10 @@ struct ChatSettingsView: View {
     let setPanelPreference: (Bool, String) -> Void
     let zoomFor: (String) -> Double
     let setZoom: (String, Double) -> Void
-    let retention: Int
-    let setRetention: (Int) -> Void
+    static let retentionOptions = [0, 1, 5, 10, 30, 60]
+    let instantRetention: Int
+    let pinnedRetention: Int
+    let setRetention: (Int, Bool) -> Void
     let shortcutControls: [ShortcutControl]
     let shortcuts: () -> Void
     let reorder: (IndexSet, Int) -> Void
@@ -213,6 +215,15 @@ struct ChatSettingsView: View {
         Binding(get: { value }, set: { setPanelPreference($0, key) })
     }
 
+    private func retentionPicker(_ title: String, value: Int, pinned: Bool) -> some View {
+        Picker(AppText.t(title), selection: Binding(get: { value }, set: { setRetention($0, pinned) })) {
+            Text(AppText.t("Release immediately")).tag(0)
+            ForEach(Self.retentionOptions.dropFirst(), id: \.self) { minutes in
+                Text("\(minutes) " + AppText.t("min")).tag(minutes)
+            }
+        }
+    }
+
     private var general: some View {
         Form {
             Toggle(AppText.t("Launch at Login"), isOn: Binding(
@@ -249,11 +260,11 @@ struct ChatSettingsView: View {
                 Text(AppText.t("New pages use this language. A website's own saved language can take priority."))
                     .font(.caption).foregroundStyle(.secondary)
                 Button(AppText.t("Reload open chats…"), action: reloadPages)
-                Picker(AppText.t("Keep hidden and inactive pages"), selection: Binding(get: { retention }, set: { setRetention($0) })) {
-                    Text(AppText.t("Release immediately")).tag(0)
-                    ForEach([1, 5, 10, 30], id: \.self) { Text("\($0) " + AppText.t("min")).tag($0) }
-                }
-                Text(AppText.t("Releasing a page keeps sign-ins and pinned links. Unsent text or an ongoing reply may be lost."))
+            }
+            Section(AppText.t("Keep inactive chats")) {
+                retentionPicker("Instant Chats", value: instantRetention, pinned: false)
+                retentionPicker("Pinned Conversations", value: pinnedRetention, pinned: true)
+                Text(AppText.t("After the time expires, instant chats start fresh and pins reopen their saved conversation. Sign-ins are kept."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section(AppText.t("Shortcuts")) {
