@@ -82,6 +82,19 @@ final class QuickChatController: NSObject {
     private var selectedIndex = 0
     private var visitedURLs: [String: URL] = [:]
     private var providerPicker: NSPopUpButton?
+    private weak var chromeView: NSView?
+    private var pageColorObservation: NSKeyValueObservation?
+
+    /// WebKit reports the page canvas color as it changes, including website theme switches.
+    /// Match the native controls to that canvas without changing the site's layout or DOM.
+    private func syncPageChrome(_ webView: WKWebView) {
+        let color = webView.underPageBackgroundColor ?? .windowBackgroundColor
+        chromeView?.layer?.backgroundColor = color.cgColor
+        if let rgb = color.usingColorSpace(.sRGB) {
+            let brightness = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+            chromeView?.appearance = NSAppearance(named: brightness < 0.5 ? .darkAqua : .aqua)
+        }
+    }
     private var chatURL: URL { providers[selectedIndex].url }
 
     private func selectProvider(_ index: Int) {
@@ -313,6 +326,8 @@ final class QuickChatController: NSObject {
         panel = nil
         webView = nil
         providerPicker = nil
+        chromeView = nil
+        pageColorObservation = nil
         crashReloads = []
         reloadOnShow = false
     }
@@ -355,9 +370,9 @@ final class QuickChatController: NSObject {
            let index = providers.firstIndex(where: { $0.url.absoluteString == saved }) { selectedIndex = index }
         if disabledURLs.contains(chatURL.absoluteString), let next = providers.firstIndex(where: { !disabledURLs.contains($0.url.absoluteString) }) { selectedIndex = next }
         let header = DraggableView()
-        header.material = .popover
-        header.blendingMode = .behindWindow
-        header.state = .active
+        header.wantsLayer = true
+        header.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        chromeView = header
         let picker = NSPopUpButton(frame: .zero, pullsDown: false)
         picker.controlSize = .regular
         picker.isBordered = false
@@ -393,7 +408,7 @@ final class QuickChatController: NSObject {
         stack.orientation = .vertical
         stack.spacing = 0
         stack.edgeInsets = NSEdgeInsets()
-        header.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        header.heightAnchor.constraint(equalToConstant: 40).isActive = true
         stack.wantsLayer = true
         stack.layer?.cornerRadius = 16
         stack.layer?.masksToBounds = true
@@ -430,7 +445,9 @@ final class QuickChatController: NSObject {
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.underPageBackgroundColor = .windowBackgroundColor
+        pageColorObservation = webView.observe(\.underPageBackgroundColor, options: [.initial, .new]) { [weak self] view, _ in
+            MainActor.assumeIsolated { self?.syncPageChrome(view) }
+        }
         return webView
     }
 
@@ -864,7 +881,7 @@ final class QuickChatPanel: NSPanel {
 }
 
 /// Header strip that drags the window; a double-click on it acts like one on the title bar.
-private final class DraggableView: NSVisualEffectView {
+private final class DraggableView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
 
     override func mouseDown(with event: NSEvent) {

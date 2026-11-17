@@ -1,0 +1,3 @@
+Generated with the built-in image_gen tool, using AppIcon-1024.png as the reference.
+
+Use case: logo-brand. Create a refined macOS app icon for Quick Chat Omni, a spin-off of the attached reference icon. Preserve the teal-to-indigo rounded square tile and white chat-bubble identity, but simplify into a sculpted white chat bubble with one crisp four-point sparkle and a subtly offset second bubble behind it to convey multiple chat providers. Exceptionally minimal, elegant native macOS icon, soft restrained dimensional highlights, excellent silhouette at 32px. One centered icon on a 1024px square canvas, tile occupying roughly 824px with transparent margins, no lettering, no mockup, no extra objects. Reference is the existing icon to evolve.

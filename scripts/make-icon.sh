@@ -1,10 +1,10 @@
 #!/bin/bash
-# Regenerates Resources/AppIcon.icns from scripts/make-icon.swift.
+# Packages the generated Omni artwork into a macOS icon.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
-swift scripts/make-icon.swift "${WORK}/icon_1024.png"
+sips -z 1024 1024 "${1:-Resources/AppIcon-Omni.png}" --out "${WORK}/icon_1024.png" >/dev/null
 SET="${WORK}/AppIcon.iconset"
 mkdir -p "${SET}"
 for s in 16 32 128 256 512; do
@@ -12,6 +12,6 @@ for s in 16 32 128 256 512; do
   sips -z $((s * 2)) $((s * 2)) "${WORK}/icon_1024.png" --out "${SET}/icon_${s}x${s}@2x.png" >/dev/null
 done
 mkdir -p Resources
-iconutil -c icns "${SET}" -o Resources/AppIcon.icns
-cp "${WORK}/icon_1024.png" Resources/AppIcon-1024.png
-echo "==> Resources/AppIcon.icns"
+iconutil -c icns "${SET}" -o Resources/AppIcon-Omni.icns
+cp "${WORK}/icon_1024.png" Resources/AppIcon-Omni-1024.png
+echo "==> Resources/AppIcon-Omni.icns"

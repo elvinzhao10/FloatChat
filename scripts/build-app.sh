@@ -34,7 +34,7 @@ echo "==> Assembling ${APP} (${BUNDLE_ID} ${VERSION} (${BUILD_NUMBER}))"
 rm -rf "${APP}" "build/Quick Chat for ChatGPT.app" # also drop the bundle built under the old name
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN_DIR}/${EXECUTABLE}" "${APP}/Contents/MacOS/${EXECUTABLE}"
-cp Resources/AppIcon.icns "${APP}/Contents/Resources/AppIcon.icns" # regenerate with scripts/make-icon.sh
+cp Resources/AppIcon-Omni.icns "${APP}/Contents/Resources/AppIcon.icns" # regenerate with scripts/make-icon.sh
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
