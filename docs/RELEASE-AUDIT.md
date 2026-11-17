@@ -1,6 +1,12 @@
 # FloatChat release checks
 
-## 0.3.2
+## 0.3.3
+
+- All five local regression suites passed on macOS. The universal 0.3.3 DMG and ZIP were built from the same app bundle with arm64 and x86_64 slices.
+- The README images were captured from a signed-out preview with transparent corners. The General screenshot shows separate instant and pinned retention settings.
+
+The checks below record the local builds that went into 0.3.3.
+
 
 ### Build 12 (local)
 
@@ -23,7 +29,7 @@
 - The provider test retains more than three parked pages and checks independent instant and pin deadlines, immediate release, and migration from the old shared duration.
 - The panel test replaces a WebKit canvas in place, checks that translucency returns while text opacity remains at one, and verifies that a pin restores its saved conversation after navigating away.
 
-### Build 6 (published)
+## 0.3.2 (published as build 6)
 
 - All five local self-tests passed. The panel regression covers independent Settings and chat windows, whole-web-view opacity, offline status recovery, keyboard delivery after switching, draft retention, and eviction. The provider test covers separate pin and instant zoom levels, Doubao registration, and rejection of authentication fragments.
 - The isolated macOS app was used to inspect the translucent web page and adjust a per-chat zoom slider. The full set of signed-in provider microphone, camera, passkey, and upload flows remains outside this run.

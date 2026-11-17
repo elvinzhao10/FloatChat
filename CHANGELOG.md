@@ -1,37 +1,13 @@
 # FloatChat version history
 
+## 0.3.3
+
+- Keep all eligible instant chats loaded for their inactivity period. Pins have a separate timer and reopen their saved conversation after expiry.
+- Adjust translucency with a slider. The rounded panel keeps text and controls opaque through conversation changes, split panes, drawers, and inset composer backdrops.
+- Switch chats with less layout work. FloatChat reuses tab buttons and applies writing-suggestion preferences when an editable field receives focus.
+- Set a local image for a custom website or restore its favicon. Both READMEs now show the current panel and Settings.
+
 ## 0.3.2
-
-### Build 12
-
-- Inset composer backdrops, such as Claude’s, blend into the page while rounded input cards stay opaque.
-
-### Build 11
-
-- Chat switches update existing tab buttons. Writing suggestions are configured on focus, without observing the message stream.
-- Route and theme callbacks share a single pending appearance update. Overlay drawers use a translucent tint without page-level blur.
-
-### Build 10
-
-- Side drawers and split panes keep their translucency through opening, closing, and resize transitions. Overlay drawers blur only the content behind them.
-- Tab switches avoid rebuilding the tab strip twice.
-
-### Build 9
-
-- The full-width composer backdrop follows the translucency setting while the composer and text stay opaque. Background updates are scoped to the visible page’s layout.
-
-### Build 8
-
-- Instant chats and pinned conversations have separate retention timers with no count limit. Instant chats start fresh after expiry. Pins reopen the saved conversation.
-- Background translucency follows client-side conversation changes while keeping text opaque.
-
-### Build 7
-
-- One continuous rounded panel surface. The translucency slider changes the background while preserving text and control opacity.
-- Custom websites can use a local image as their icon, with an option to restore the website’s favicon.
-- Refreshed screenshots and a short explanation of local WebKit sign-ins in both READMEs.
-
-### Build 6
 
 - Doubao (豆包) joins the built-in chat platforms.
 - Page zoom has keyboard shortcuts and a per-chat slider in Settings. Each pinned conversation can have its own zoom.

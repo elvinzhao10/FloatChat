@@ -6,7 +6,7 @@
   <p>macOS 14 或更高版本 · 支持 Apple 芯片和 Intel Mac</p>
   <p>FloatChat 把你常用的聊天网站放进一个小巧的 macOS 原生悬浮窗口。它使用 Swift、AppKit 和 macOS 自带的 WebKit，无需打包独立的浏览器运行环境。闲置页面会按设置释放。</p>
   <p>直接在各个网站上登录。WebKit 在本机保存 FloatChat 的登录状态，与默认浏览器分开。FloatChat 无需单独注册账号或提供 API 密钥。你可以在使用其他 Mac 应用时保留悬浮窗口，也可随时在默认浏览器中打开当前页面。</p>
-  <p><img src="docs/images/panel.png" width="350" alt="FloatChat 悬浮窗口，顶部显示网站图标，当前打开 ChatGPT"></p>
+  <p><img src="docs/images/panel.png" width="350" alt="FloatChat 圆角悬浮窗口，顶部显示九个平台的图标，当前打开 ChatGPT"></p>
   <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"> <img src="Resources/Providers/doubao.png" width="24" height="24" alt="Doubao"></p>
   <p>内置 9 个平台（含豆包），也可添加你常用的聊天网站。</p>
 </div>
@@ -45,7 +45,7 @@
 
 设置可以与悬浮窗口同时打开。在**聊天**中可以拖动排序、隐藏网站、点击铅笔修改自定义网站的名称和地址，或为固定会话重命名。点击自定义网站的图标即可选取本地图片、恢复网站图标或刷新图标。右键点击标签可查看当前主机名或调整网页缩放。打开**通用 → 悬浮窗口**可选择打开位置、点击外部时隐藏，或用滑块调整背景透明度。文字与控件保持清晰。macOS 26 及以上使用液态玻璃效果。
 
-<p align="center"><img src="docs/images/general.png" width="460" alt="通用设置中的透明度滑块、窗口位置和点击外部隐藏设置"></p>
+<p align="center"><img src="docs/images/general.png" width="460" alt="通用设置中的透明度滑块，以及即时聊天和固定会话各自的保留时间"></p>
 
 ## 页面保留与登录
 
