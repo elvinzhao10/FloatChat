@@ -1,6 +1,7 @@
 <div align="center">
   <img src="Resources/AppIcon-Omni-1024.png" width="112" alt="Quick Chat Omni logo">
   <h1>Quick Chat Omni</h1>
+  <p><a href="README.zh-CN.md">简体中文</a></p>
   <p><strong>Your chat websites. One small floating window.</strong></p>
   <p>ChatGPT · Claude · DeepSeek · Kimi · Gemini · Perplexity · Copilot · Grok · Your own</p>
   <p>
