@@ -21,16 +21,16 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
     private let rules = NSTextField(wrappingLabelWithString: Shortcut.rulesText)
     private var rulesResetToken = 0
     private var onChange: ((Shortcut) -> Void)?
-    private var onResetSizeChange: ((Shortcut) -> Void)?
-    private var onMaximizeChange: ((Shortcut) -> Void)?
+    private var onResetSizeChange: ((Shortcut?) -> Void)?
+    private var onMaximizeChange: ((Shortcut?) -> Void)?
     private var onClose: (() -> Void)?
 
     /// `miniShortcut`: Show Mini's current shortcut, shown as a hint (picking it turns Show Mini off).
     /// `resetSize`, `maximize`: the current local shortcuts. All three shortcuts stay distinct.
-    func show(current: Shortcut, resetSize: Shortcut, maximize: Shortcut, miniShortcut: String?,
+    func show(current: Shortcut, resetSize: Shortcut?, maximize: Shortcut?, miniShortcut: String?,
               onChange: @escaping (Shortcut) -> Void,
-              onResetSizeChange: @escaping (Shortcut) -> Void,
-              onMaximizeChange: @escaping (Shortcut) -> Void,
+              onResetSizeChange: @escaping (Shortcut?) -> Void,
+              onMaximizeChange: @escaping (Shortcut?) -> Void,
               onClose: @escaping () -> Void) {
         self.onChange = onChange
         self.onResetSizeChange = onResetSizeChange
@@ -121,7 +121,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
             field.setAccessibilityElement(true)
             field.setAccessibilityRole(.button)
             field.setAccessibilityLabel(AppText.t(name))
-            field.setAccessibilityValue(field.shortcut.displayString)
+            field.setAccessibilityValue(field.shortcut?.displayString ?? AppText.t("None"))
             field.setAccessibilityHelp(AppText.t("Click, then press a key combination to record a shortcut."))
         }
         let label = Self.sectionLabel("Quick Chat Omni", detail: "Opens Quick Chat Omni from any app.")
@@ -129,11 +129,11 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
         let row = NSStackView(views: [recorder, reset])
         let resetSizeLabel = Self.sectionLabel("Reset Window Size",
                                                detail: "Works only while Quick Chat Omni is focused.")
-        let resetSizeReset = NSButton(title: AppText.t("Reset to") + " ⌘O", target: self, action: #selector(resetResetSizeToDefault))
+        let resetSizeReset = NSButton(title: AppText.t("Clear"), target: self, action: #selector(resetResetSizeToDefault))
         let resetSizeRow = NSStackView(views: [resetSizeRecorder, resetSizeReset])
         let maximizeLabel = Self.sectionLabel("Maximize / Restore Size",
                                               detail: "Works only while Quick Chat Omni is focused.")
-        let maximizeReset = NSButton(title: AppText.t("Reset to") + " ⌘F", target: self, action: #selector(resetMaximizeToDefault))
+        let maximizeReset = NSButton(title: AppText.t("Clear"), target: self, action: #selector(resetMaximizeToDefault))
         let maximizeRow = NSStackView(views: [maximizeRecorder, maximizeReset])
         for button in [reset, resetSizeReset, maximizeReset] {
             button.setContentHuggingPriority(.required, for: .horizontal)
@@ -173,7 +173,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
     }
 
     private func updateAvailability() {
-        let issue = GlobalHotKey.availabilityIssue(recorder.shortcut).map(AppText.t)
+        let issue = GlobalHotKey.availabilityIssue(recorder.shortcut ?? .optionSpace).map(AppText.t)
         availability.stringValue = issue ?? AppText.t("Available to register. macOS cannot reveal every app's shortcuts.")
         availability.textColor = issue == nil ? .secondaryLabelColor : .systemOrange
         for view in suggestionRow.arrangedSubviews { suggestionRow.removeArrangedSubview(view); view.removeFromSuperview() }
@@ -233,17 +233,15 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func resetResetSizeToDefault() {
-        if let reason = resetSizeRecorder.validate?(.commandO) { return showRejection(reason) }
         showRules()
-        resetSizeRecorder.shortcut = .commandO
-        onResetSizeChange?(.commandO)
+        resetSizeRecorder.shortcut = nil
+        onResetSizeChange?(nil)
     }
 
     @objc private func resetMaximizeToDefault() {
-        if let reason = maximizeRecorder.validate?(.commandF) { return showRejection(reason) }
         showRules()
-        maximizeRecorder.shortcut = .commandF
-        onMaximizeChange?(.commandF)
+        maximizeRecorder.shortcut = nil
+        onMaximizeChange?(nil)
     }
 
     @objc private func finish() { window?.close() }
@@ -257,7 +255,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
 
 /// Focusable field that captures the next shortcut-worthy key press.
 private final class RecorderField: NSView {
-    var shortcut: Shortcut = .optionSpace { didSet { needsDisplay = true; setAccessibilityValue(shortcut.displayString) } }
+    var shortcut: Shortcut? = .optionSpace { didSet { needsDisplay = true; setAccessibilityValue(shortcut?.displayString ?? AppText.t("None")) } }
     var onRecord: ((Shortcut) -> Void)?
     var onReject: ((String) -> Void)?
     /// Extra check after the basic rules; returns why `new` isn't allowed, or nil if it is.
@@ -304,7 +302,8 @@ private final class RecorderField: NSView {
         (recording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.lineWidth = recording ? 2 : 1
         path.stroke()
-        let text = recording ? "Press shortcut… (now \(shortcut.displayString))" : shortcut.displayString
+        let current = shortcut?.displayString ?? AppText.t("None")
+        let text = recording ? "Press shortcut… (now \(current))" : current
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 14, weight: .medium),
             .foregroundColor: recording ? NSColor.secondaryLabelColor : NSColor.labelColor,

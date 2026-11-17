@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import SwiftUI
+import ServiceManagement
 
 /// Floating Quick Chat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
 /// web view, which uses its compact layout at this width.
@@ -13,6 +14,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         var conversationURL: URL? = nil
         var topic: String? = nil
         var pinned: Bool? = nil
+        var manualTopic: String? = nil
         var key: String { sessionID ?? url.absoluteString }
         var isPinned: Bool { pinned == true }
     }
@@ -59,7 +61,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         disabledURLs = Set(preferences.stringArray(forKey: "disabledProviders") ?? [])
         if providers.isEmpty { deletedURLs.remove(Self.builtIns[0].url.absoluteString) }
         if providers.allSatisfy({ disabledURLs.contains($0.key) }) { disabledURLs.remove(providers[0].key) }
-        if let saved = preferences.string(forKey: "selectedProvider"), let index = providers.firstIndex(where: { $0.key == saved }) { selectedIndex = index }
+        let saved = preferences.string(forKey: "selectedProvider")
+        selectedIndex = providers.firstIndex { $0.key == saved && !disabledURLs.contains($0.key) }
+            ?? providers.firstIndex { !disabledURLs.contains($0.key) } ?? 0
     }
     private var providers: [Provider] {
         let available = (Self.builtIns + customProviders + savedSessions).filter { !deletedURLs.contains($0.key) }
@@ -101,7 +105,10 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             }
         }
         let settings = ActionMenuItem(AppText.t("Settings…")) { [weak self] in self?.showSettings() }
-        return [open, switchChat, .separator(), settings]
+        let updates = ActionMenuItem(AppText.t("Check for Updates…")) {
+            NSWorkspace.shared.open(URL(string: "https://github.com/elvinzhao10/QuickChat-Omni/releases/latest")!)
+        }
+        return [open, switchChat, .separator(), settings, updates]
     }
     private func reorderProviders(_ offsets: IndexSet, to destination: Int) {
         let selected = providers[selectedIndex].key
@@ -136,7 +143,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let selected = providers[selectedIndex].key
         let key = provider.key
         if let page = parkedPages.removeValue(forKey: key) { releasePage(page.view) }
-        visitedURLs.removeValue(forKey: key)
         if provider.sessionID == nil { customProviders.removeAll { $0.url == provider.url && $0.sessionID == nil } }
         savedSessions.removeAll { $0.key == key }
         saveSessions()
@@ -190,6 +196,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             },
             language: language,
             setLanguage: { [weak self] code in self?.setLanguage(code) },
+            loginStatus: SMAppService.mainApp.status,
+            setLaunchAtLogin: { [weak self] enabled in self?.setLaunchAtLogin(enabled) },
+            editEntry: { [weak self] index in self?.editEntry(index) },
             refreshIcon: { [weak self] url in self?.refreshFavicon(url) },
             clearWebsiteData: { [weak self] in self?.confirmClearWebsiteData() },
             clearingWebsiteData: clearingWebsiteData,
@@ -224,7 +233,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             guard response == .alertSecondButtonReturn, let self else { return }
             self.clearingWebsiteData = true
             self.tearDown()
-            self.visitedURLs.removeAll()
             self.updateSettings()
             WKWebsiteDataStore.default().removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
                                                     modifiedSince: .distantPast) { [weak self] in
@@ -284,7 +292,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         rememberPinnedPage()
         for page in parkedPages.values { releasePage(page.view) }
-        parkedPages.removeAll(); visitedURLs.removeAll(); prunePages()
+        parkedPages.removeAll()
+        prunePages()
         if let webView { webView.load(pageRequest(webView.url ?? chatURL)) }
     }
     private func refreshFavicon(_ url: URL) {
@@ -317,13 +326,12 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
     @objc private func openInBrowser(_ sender: Any?) {
         let url = webView?.url ?? chatURL
-        guard url.scheme == "https" else { return }
+        guard Self.isHTTPSPage(url) else { return }
         NSWorkspace.shared.open(url)
     }
     @objc private func dismissPanel(_ sender: Any?) { hide(restoreFocus: true) }
 
     private var selectedIndex = 0
-    private var visitedURLs: [String: URL] = [:]
     private var providerTabs: NSStackView?
     private var pinnedTabs: NSStackView?
     private weak var pinnedRow: NSStackView?
@@ -338,6 +346,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private struct ParkedPage {
         let view: WKWebView
         let parkedAt: Date
+        var failureURL: URL? = nil
     }
     private var parkedPages: [String: ParkedPage] = [:]
     private var evictionTimer: Timer?
@@ -362,12 +371,10 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let cutoff = now.addingTimeInterval(-lifetime)
         for (key, page) in parkedPages where page.parkedAt <= cutoff {
             releasePage(page.view)
-            forgetExpiredInstant(key)
             parkedPages.removeValue(forKey: key)
         }
         while parkedPages.count > 3, let oldest = parkedPages.min(by: { $0.value.parkedAt < $1.value.parkedAt }) {
             releasePage(oldest.value.view)
-            forgetExpiredInstant(oldest.key)
             parkedPages.removeValue(forKey: oldest.key)
         }
         if let oldest = parkedPages.values.map(\.parkedAt).min() {
@@ -380,7 +387,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
     private func observePageColor(_ view: WKWebView) {
         pageURLObservation = view.observe(\.url, options: [.new]) { [weak self] view, _ in
-            MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage() } }
+            MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage(); self?.updateWebsiteIdentity() } }
         }
         pageTitleObservation = view.observe(\.title, options: [.new]) { [weak self] view, _ in
             MainActor.assumeIsolated { if self?.webView === view { self?.rememberPinnedPage(); self?.updateTabPreviews() } }
@@ -409,33 +416,48 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard providers.indices.contains(index), !disabledURLs.contains(providers[index].key), index != selectedIndex else { return }
         rememberPinnedPage()
         prunePages()
-        let oldKey = providers[selectedIndex].key
-        if let old = webView {
-            if let url = old.url, isProviderHost(url.host, provider: providers[selectedIndex]) { visitedURLs[oldKey] = url }
-            contentStack?.removeArrangedSubview(old)
-            old.removeFromSuperview()
-            old.setAllMediaPlaybackSuspended(true)
-            old.setMicrophoneCaptureState(.none, completionHandler: nil)
-            old.setCameraCaptureState(.none, completionHandler: nil)
-            parkedPages[oldKey] = ParkedPage(view: old, parkedAt: .now)
-        }
+        parkActivePage()
+        failureURL = nil
         selectedIndex = index
         preferences.set(providers[selectedIndex].key, forKey: "selectedProvider")
-        if contentStack != nil {
-            let cached = parkedPages.removeValue(forKey: providers[selectedIndex].key)
-            let next = cached?.view ?? makeWebView()
-            webView = next
-            next.setAllMediaPlaybackSuspended(false)
-            contentStack?.addArrangedSubview(next)
-            if let resizeGrip { contentStack?.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
-            observePageColor(next)
-            if cached == nil { next.load(pageRequest(visitedURLs[providers[selectedIndex].key] ?? chatURL)) }
-            panel?.makeFirstResponder(next)
-        }
+        if panel?.isVisible == true { attachSelectedPage() }
         crashReloads = []
-        reloadOnShow = false
         refreshPicker()
         prunePages()
+    }
+
+    private func parkActivePage() {
+        guard let view = webView else { return }
+        let key = providers[selectedIndex].key
+        contentStack?.removeArrangedSubview(view)
+        view.removeFromSuperview()
+        view.setAllMediaPlaybackSuspended(true)
+        view.setMicrophoneCaptureState(.none, completionHandler: nil)
+        view.setCameraCaptureState(.none, completionHandler: nil)
+        parkedPages[key] = ParkedPage(view: view, parkedAt: .now, failureURL: failureURL)
+        webView = nil
+        pageColorObservation = nil
+        pageURLObservation = nil
+        pageTitleObservation = nil
+    }
+
+    private func attachSelectedPage() {
+        guard webView == nil, let contentStack else { return }
+        prunePages()
+        let cached = parkedPages.removeValue(forKey: providers[selectedIndex].key)
+        let view = cached?.view ?? makeWebView()
+        webView = view
+        failureURL = cached?.failureURL
+        view.setAllMediaPlaybackSuspended(false)
+        view.pageZoom = zoom(for: providers[selectedIndex].url)
+        contentStack.addArrangedSubview(view)
+        if let resizeGrip { contentStack.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
+        observePageColor(view)
+        refreshPicker()
+        updateWebsiteIdentity()
+        updateStatus()
+        if cached == nil { view.load(pageRequest(chatURL)) }
+        panel?.makeFirstResponder(view)
     }
 
     @objc private func providerChanged(_ sender: NSButton) {
@@ -515,6 +537,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             button.tag = index
             button.setButtonType(.pushOnPushOff)
             button.state = index == selectedIndex ? .on : .off
+            button.contextMenu = { [weak self] in self?.tabMenu(for: provider) }
             button.toolTip = preview(for: provider)
             row.addArrangedSubview(button)
         }
@@ -522,13 +545,113 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private func saveSessions() {
         if let data = try? JSONEncoder().encode(savedSessions) { preferences.set(data, forKey: "pinnedSessions") }
     }
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = AppText.t("Couldn’t change Launch at Login.")
+            alert.informativeText = error.localizedDescription
+            if let settingsWindow { alert.beginSheetModal(for: settingsWindow) }
+        }
+        updateSettings()
+    }
+
+    private func editEntry(_ index: Int) {
+        guard providers.indices.contains(index), let settingsWindow else { return }
+        let provider = providers[index]
+        let alert = NSAlert()
+        alert.messageText = AppText.t(provider.isPinned ? "Rename Pinned Chat" : "Edit Website")
+        alert.addButton(withTitle: AppText.t("Save"))
+        alert.addButton(withTitle: AppText.t("Cancel"))
+        let name = NSTextField(string: displayName(provider))
+        name.setAccessibilityLabel(AppText.t("Website name"))
+        let address = NSTextField(string: provider.url.absoluteString)
+        address.setAccessibilityLabel(AppText.t("Website address"))
+        let fields = NSStackView(views: provider.isPinned ? [name] : [name, address])
+        fields.orientation = .vertical
+        fields.spacing = 8
+        fields.frame = NSRect(x: 0, y: 0, width: 310, height: provider.isPinned ? 26 : 58)
+        alert.accessoryView = fields
+        alert.window.initialFirstResponder = name
+        alert.beginSheetModal(for: settingsWindow) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if provider.isPinned {
+                guard let i = self.savedSessions.firstIndex(where: { $0.key == provider.key }) else { return }
+                self.savedSessions[i].manualTopic = title.isEmpty ? nil : String(title.prefix(100))
+                self.saveSessions()
+            } else {
+                guard !title.isEmpty, let url = ProviderAddress.parse(address.stringValue),
+                      let i = self.customProviders.firstIndex(where: { $0.key == provider.key }),
+                      !(Self.builtIns + self.customProviders).contains(where: { $0.key != provider.key && $0.url == url }) else {
+                    let warning = NSAlert()
+                    warning.messageText = AppText.t("Enter a name and a unique HTTPS website address.")
+                    warning.beginSheetModal(for: settingsWindow)
+                    return
+                }
+                let selected = self.providers[self.selectedIndex].key
+                if url != provider.url {
+                    if let old = self.parkedPages.removeValue(forKey: provider.key) { self.releasePage(old.view) }
+                    self.providerOrder = self.providers.map { $0.key == provider.key ? url.absoluteString : $0.key }
+                    self.deletedURLs.remove(url.absoluteString)
+                    if self.disabledURLs.remove(provider.key) != nil { self.disabledURLs.insert(url.absoluteString) }
+                    self.preferences.set(self.providerOrder, forKey: "providerOrder")
+                    self.preferences.set(Array(self.deletedURLs), forKey: "deletedProviders")
+                    self.preferences.set(Array(self.disabledURLs), forKey: "disabledProviders")
+                }
+                self.customProviders[i] = Provider(name: title, url: url)
+                let key = selected == provider.key ? url.absoluteString : selected
+                self.selectedIndex = self.providers.firstIndex(where: { $0.key == key }) ?? 0
+                self.preferences.set(key, forKey: "selectedProvider")
+                self.saveCustomProviders()
+                if url != provider.url { self.refreshFavicon(url) }
+            }
+            self.prunePages()
+            self.refreshPicker()
+            self.updateSettings()
+        }
+    }
+
+    private func zoom(for site: URL) -> Double {
+        let value = (preferences.dictionary(forKey: "websiteZoom")?[site.absoluteString] as? Double) ?? 1
+        return (0.6...2).contains(value) ? value : 1
+    }
+
+    private func changeZoom(for site: URL, by delta: Double?) {
+        let value = delta.map { min(2, max(0.6, zoom(for: site) + $0)) } ?? 1
+        var values = preferences.dictionary(forKey: "websiteZoom") ?? [:]
+        values[site.absoluteString] = value
+        preferences.set(values, forKey: "websiteZoom")
+        if providers[selectedIndex].url == site { webView?.pageZoom = value }
+    }
+
+    private func tabMenu(for provider: Provider) -> NSMenu {
+        let page = provider.key == providers[selectedIndex].key ? webView : parkedPages[provider.key]?.view
+        let host = page?.url?.host ?? provider.conversationURL?.host ?? provider.url.host ?? ""
+        let menu = NSMenu()
+        let identity = NSMenuItem(title: host, action: nil, keyEquivalent: "")
+        identity.isEnabled = false
+        menu.addItem(identity)
+        menu.addItem(.separator())
+        for (label, delta) in [("Zoom In", 0.1 as Double?), ("Zoom Out", -0.1), ("Actual Size", nil)] {
+            menu.addItem(ActionMenuItem(AppText.t(label)) { [weak self] in self?.changeZoom(for: provider.url, by: delta) })
+        }
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem(AppText.t("Reset Window Size")) { [weak self] in self?.panel?.resetSize() })
+        return menu
+    }
+
     private func preview(for provider: Provider) -> String {
         let page = provider.key == providers[selectedIndex].key ? webView : parkedPages[provider.key]?.view
+        if let label = provider.manualTopic { return label }
         let title = page?.title ?? provider.topic ?? provider.name
         let topic = topicOnly(title, provider: provider)
         return topic == "New chat" ? AppText.t(topic) : topic
     }
     private func displayName(_ provider: Provider) -> String {
+        if let label = provider.manualTopic { return label }
         if provider.isPinned, provider.topic == "New chat" { return AppText.t("New chat") }
         return provider.topic ?? provider.name
     }
@@ -555,9 +678,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let sensitiveQuery = Set((URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { $0.name.lowercased() })
         return parts.isDisjoint(with: ["login", "signin", "sign-in", "sign_in", "signup", "sign-up", "sign_up", "auth", "oauth", "oauth2", "logout"])
             && sensitiveQuery.isDisjoint(with: ["code", "token", "access_token", "refresh_token", "id_token", "password", "credential", "assertion", "session_token"])
-    }
-    private func forgetExpiredInstant(_ key: String) {
-        if providers.first(where: { $0.key == key })?.isPinned != true { visitedURLs.removeValue(forKey: key) }
     }
     private func rememberPinnedPage() {
         let provider = providers[selectedIndex]
@@ -613,7 +733,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             provider.conversationURL = url
             provider.topic = String(topicOnly(title, provider: provider).prefix(100))
             savedSessions.append(provider)
-            visitedURLs.removeValue(forKey: oldKey)
             selectedIndex = providers.firstIndex(where: { $0.key == provider.key }) ?? selectedIndex
         }
         preferences.set(providers[selectedIndex].key, forKey: "selectedProvider")
@@ -637,15 +756,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private var shownAt: Date?
     private var lostKeyAt: Date?
     private var keepFocusUntil: Date?
-    /// When the panel was last hidden.
-    private var hiddenAt: Date?
     private var workspaceObservers: [NSObjectProtocol] = []
     /// Where each in-flight download is being written, for "reveal in Finder" when it finishes.
-    private var downloadDestinations: [ObjectIdentifier: URL] = [:]
+    private var downloads: [ObjectIdentifier: (download: WKDownload, destination: URL)] = [:]
     /// Recent automatic reloads after the web content process died, to stop a crash loop.
     private var crashReloads: [Date] = []
-    /// Set when crash reloads were given up; the page reloads the next time the panel shows.
-    private var reloadOnShow = false
 
     /// Local shortcut (only while the panel is key) that triggers the panel's `resetSize()`.
     var resetSizeShortcut = Shortcut.loadResetSize() {
@@ -661,7 +776,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     /// shows it here. Focus goes back to the previous app only if the panel had it.
     func toggle() {
         if let panel, panel.isVisible, panel.isOnActiveSpace {
-            hide(restoreFocus: panel.isKeyWindow && NSApp.isActive)
+            hide(restoreFocus: panel.isKeyWindow)
         } else {
             show()
         }
@@ -671,17 +786,10 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard !clearingWebsiteData else { return }
         settingsWindow?.orderOut(nil)
         let panel = self.panel ?? makePanel()
+        keepPanelReachable(panel)
+        attachSelectedPage()
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-        if let webView {
-            if reloadOnShow {
-                reload(webView)
-                reloadOnShow = false
-                crashReloads = []
-            }
-        }
-        hiddenAt = nil
-        webView?.setAllMediaPlaybackSuspended(false)
         // Don't activate the app: activation is only a request since macOS 14, and after a
         // Space switch macOS hands focus on to another app (Finder, the full-screen app) and the
         // panel loses the keyboard. A non-activating panel takes key without it, like Spotlight.
@@ -708,7 +816,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                 let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 MainActor.assumeIsolated {
                     self?.otherAppActivated(app)
-                    self?.reclaimFocusIfKept()
                 }
             },
         ]
@@ -720,6 +827,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private func otherAppActivated(_ app: NSRunningApplication?) {
         guard let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               panel?.isVisible == true else { return }
+        keepFocusUntil = nil
         previousApp = app
     }
 
@@ -735,7 +843,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard let until = keepFocusUntil, Date.now < until,
               let panel, panel.isVisible, panel.isOnActiveSpace else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, let panel = self.panel, panel.isVisible, !panel.isKeyWindow else { return }
+            guard let self, let until = self.keepFocusUntil, Date.now < until,
+                  let panel = self.panel, panel.isVisible, panel.isOnActiveSpace, !panel.isKeyWindow else { return }
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(self.webView)
         }
@@ -747,15 +856,18 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         rememberPinnedPage()
         keepFocusUntil = nil
         panel.orderOut(nil)
-        webView?.setMicrophoneCaptureState(.none, completionHandler: nil)
-        webView?.setCameraCaptureState(.none, completionHandler: nil)
-        webView?.setAllMediaPlaybackSuspended(true)
-        hiddenAt = .now
+        recentDownload = nil
+        parkActivePage()
+        failureURL = nil
+        prunePages()
         if restoreFocus { previousApp?.activate() }
     }
 
     /// Closes the panel and releases the web view (the sign-in session stays in the data store).
     func tearDown() {
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        failureURL = nil
+        recentDownload = nil
         panel?.orderOut(nil)
         if let webView { releasePage(webView) }
         panel?.contentView = nil
@@ -774,7 +886,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         pageURLObservation = nil
         pageTitleObservation = nil
         crashReloads = []
-        reloadOnShow = false
     }
 
     // MARK: Building
@@ -789,6 +900,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             self?.reclaimFocusIfKept()
         }
         observeSpaceChanges()
+        NotificationCenter.default.addObserver(self, selector: #selector(screenConfigurationChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
         panel.resetSizeShortcut = resetSizeShortcut
         panel.maximizeShortcut = maximizeShortcut
 
@@ -850,8 +963,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         providerTabs = tabs
         pinnedTabs = pins
         pinnedRow = pinnedGroup
-        let webView = makeWebView()
-        let stack = NSStackView(views: [header, webView])
+        let stack = NSStackView(views: [header, identityRow(), statusRow()])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.edgeInsets = NSEdgeInsets()
@@ -884,19 +996,125 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         panel.setFrameAutosaveName(QuickChatPanel.autosaveName)
 
         self.panel = panel
-        self.webView = webView
         refreshPicker()
-        webView.load(pageRequest(chatURL))
         return panel
+    }
+
+    private var failureURL: URL?
+    private var recentDownload: URL?
+    private weak var identityLabel: NSTextField?
+    private weak var notice: NSStackView?
+    private weak var noticeLabel: NSTextField?
+    private weak var noticeAction: NSButton?
+    private weak var noticeBrowser: NSButton?
+
+    private func identityRow() -> NSView {
+        let label = NSTextField(labelWithString: "")
+        label.alignment = .center
+        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingMiddle
+        label.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        label.isHidden = true
+        identityLabel = label
+        return label
+    }
+
+    private func updateWebsiteIdentity() {
+        let provider = providers[selectedIndex]
+        let host = webView?.url?.host
+        identityLabel?.stringValue = host ?? ""
+        identityLabel?.isHidden = host == nil || isProviderHost(host, provider: provider)
+    }
+
+    private func statusRow() -> NSView {
+        let label = NSTextField(labelWithString: "")
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let action = NSButton(title: "", target: self, action: #selector(noticeActionClicked))
+        let browser = NSButton(title: AppText.t("Open in Browser"), target: self, action: #selector(openFailedPage))
+        let row = NSStackView(views: [label, action, browser])
+        row.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+        row.spacing = 8
+        row.isHidden = true
+        notice = row
+        noticeLabel = label
+        noticeAction = action
+        noticeBrowser = browser
+        return row
+    }
+
+    private func updateStatus() {
+        notice?.isHidden = failureURL == nil && recentDownload == nil
+        noticeBrowser?.isHidden = failureURL == nil
+        noticeLabel?.stringValue = AppText.t(failureURL == nil ? "Downloaded" : "Couldn’t load this website.")
+        noticeAction?.title = AppText.t(failureURL == nil ? "Show in Finder" : "Retry")
+    }
+
+    @objc private func noticeActionClicked() {
+        if let url = failureURL {
+            crashReloads.removeAll()
+            failureURL = nil
+            updateStatus()
+            webView?.load(pageRequest(url))
+        } else if let url = recentDownload {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            recentDownload = nil
+            updateStatus()
+        }
+    }
+
+    @objc private func openFailedPage() {
+        if let url = failureURL { NSWorkspace.shared.open(url) }
+    }
+
+    private func pageFailed(_ view: WKWebView, error: Error) {
+        let error = error as NSError
+        guard !(error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled),
+              !(error.domain == "WebKitErrorDomain" && error.code == 102) else { return }
+        let url = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+        let safeURL = Self.isHTTPSPage(url) ? url : nil
+        if view === webView {
+            failureURL = safeURL ?? chatURL
+            updateStatus()
+        } else if let key = parkedPages.first(where: { $0.value.view === view })?.key,
+                  let provider = providers.first(where: { $0.key == key }) {
+            parkedPages[key]?.failureURL = safeURL ?? provider.conversationURL ?? provider.url
+        }
+    }
+
+    @objc private func screenConfigurationChanged() {
+        if let panel, panel.isVisible { keepPanelReachable(panel) }
+    }
+
+    private func keepPanelReachable(_ panel: NSPanel) {
+        guard let screen = NSScreen.screens.max(by: {
+            let lhs = $0.visibleFrame.intersection(panel.frame)
+            let rhs = $1.visibleFrame.intersection(panel.frame)
+            return lhs.width * lhs.height < rhs.width * rhs.height
+        }) else { return }
+        let visible = screen.visibleFrame
+        let overlap = visible.intersection(panel.frame)
+        if overlap.width < 100 || overlap.height < 48 {
+            center(panel)
+            return
+        }
+        var frame = panel.frame
+        frame.size.width = min(frame.width, visible.width)
+        frame.size.height = min(frame.height, visible.height)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        if frame != panel.frame { panel.setFrame(frame, display: true) }
     }
 
     private func center(_ panel: NSPanel) {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
-        let size = panel.frame.size
-        panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
-                                     y: visible.minY + (visible.height - size.height) * 0.6))
+        let size = NSSize(width: min(panel.frame.width, visible.width),
+                          height: min(panel.frame.height, visible.height))
+        panel.setFrame(NSRect(x: visible.midX - size.width / 2,
+                              y: visible.minY + (visible.height - size.height) * 0.6,
+                              width: size.width, height: size.height), display: true)
     }
 
     private func makeWebView() -> WKWebView {
@@ -909,7 +1127,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        observePageColor(webView)
         return webView
     }
 
@@ -938,7 +1155,16 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
     private func focusComposer() {
         // Best effort: chatgpt.com's composer is a contenteditable #prompt-textarea.
-        webView?.evaluateJavaScript("document.querySelector('#prompt-textarea')?.focus()")
+        webView?.evaluateJavaScript("""
+            if (document.activeElement === document.body || document.activeElement == null) {
+                document.querySelector('#prompt-textarea')?.focus()
+            }
+            """)
+    }
+
+    private static func isHTTPSPage(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme?.lowercased() == "https" && url.host != nil && url.user == nil && url.password == nil
     }
 
     /// blob: and data: URLs are page-generated files (exports, images); they're saved, never shown.
@@ -947,17 +1173,18 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     /// ~/Downloads/<name>, or "<name> 2", "<name> 3", … if that already exists (Finder-style).
-    private static func uniqueDownloadURL(suggestedFilename: String) -> URL {
+    private static func uniqueDownloadURL(suggestedFilename: String, reserved: Set<URL>) -> URL {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
         var name = (suggestedFilename as NSString).lastPathComponent
             .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty || name.hasPrefix(".") { name = "download" + name }
         let base = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         var candidate = downloads.appendingPathComponent(name)
         var n = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
+        while reserved.contains(candidate) || FileManager.default.fileExists(atPath: candidate.path) {
             let numbered = "\(base) \(n)" + (ext.isEmpty ? "" : ".\(ext)")
             candidate = downloads.appendingPathComponent(numbered)
             n += 1
@@ -982,7 +1209,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard webView === self.webView, panel?.isVisible == true, let url = navigationAction.request.url else { return nil }
-        guard url.scheme == "https" || Self.isGeneratedFile(url) else { return nil }
+        guard Self.isHTTPSPage(url) || Self.isGeneratedFile(url) else { return nil }
         if Self.isGeneratedFile(url) {
             // window.open(blob:/data:) would otherwise replace the chat in the panel.
             webView.startDownload(using: navigationAction.request) { $0.delegate = self }
@@ -996,7 +1223,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
-        guard webView === self.webView else { decisionHandler(.cancel); return }
+        let active = webView === self.webView
         let url = navigationAction.request.url
         if let scheme = url?.scheme?.lowercased(), !["https", "about", "blob", "data"].contains(scheme) {
             decisionHandler(.cancel); return
@@ -1004,10 +1231,14 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         // <a download>, blob:/data: links: save the file instead of navigating (checked first, as
         // download links often point at file hosts that would otherwise open in the browser).
         if navigationAction.shouldPerformDownload || (navigationAction.targetFrame?.isMainFrame == true && Self.isGeneratedFile(url)) {
-            decisionHandler(.download)
+            decisionHandler(active ? .download : .cancel)
             return
         }
-        if navigationAction.targetFrame?.isMainFrame == true, navigationAction.navigationType == .linkActivated,
+        if navigationAction.targetFrame?.isMainFrame == true, !Self.isHTTPSPage(url) {
+            decisionHandler(.cancel)
+            return
+        }
+        if active, navigationAction.targetFrame?.isMainFrame == true, navigationAction.navigationType == .linkActivated,
            opensInBrowser(url, from: webView.url), let url {
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
@@ -1019,11 +1250,14 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     /// Responses the web view can't display, or that the server marks as attachments, are saved.
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
-        guard webView === self.webView else { decisionHandler(.cancel); return }
+        if navigationResponse.isForMainFrame, !Self.isHTTPSPage(navigationResponse.response.url) {
+            decisionHandler(.cancel)
+            return
+        }
         let disposition = (navigationResponse.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased()
         let isAttachment = disposition?.hasPrefix("attachment") == true
-        decisionHandler(!navigationResponse.canShowMIMEType || isAttachment ? .download : .allow)
+        decisionHandler(!navigationResponse.canShowMIMEType || isAttachment ? (webView === self.webView ? .download : .cancel) : .allow)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -1035,12 +1269,34 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if webView === self.webView { focusComposer(); rememberPinnedPage(); refreshPicker() }
+        guard webView === self.webView else {
+            if let key = parkedPages.first(where: { $0.value.view === webView })?.key {
+                parkedPages[key]?.failureURL = nil
+            }
+            return
+        }
+        failureURL = nil
+        updateStatus()
+        updateWebsiteIdentity()
+        if panel?.isKeyWindow == true { focusComposer() }
+        rememberPinnedPage()
+        refreshPicker()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if webView === self.webView { updateWebsiteIdentity() }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        pageFailed(webView, error: error)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        pageFailed(webView, error: error)
     }
 
     /// macOS may kill the web content process (often while hidden, under memory pressure), which
-    /// leaves the view blank; reload right away so it's ready before the panel is shown again.
-    /// A page that keeps crashing it (3 times in a minute) is left until the panel is next shown.
+    /// leaves the view blank. Discard parked pages and retry active pages up to three times.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard webView === self.webView else {
             if let key = parkedPages.first(where: { $0.value.view === webView })?.key {
@@ -1051,8 +1307,9 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         let now = Date()
         crashReloads.removeAll { now.timeIntervalSince($0) > 60 }
         guard crashReloads.count < 3 else {
-            log.error("Web content process keeps terminating; reloading when the panel is next shown")
-            reloadOnShow = true
+            log.error("Web content process keeps terminating")
+            failureURL = Self.isHTTPSPage(webView.url) ? webView.url : chatURL
+            updateStatus()
             return
         }
         crashReloads.append(now)
@@ -1071,7 +1328,10 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         let open = NSOpenPanel()
         open.allowsMultipleSelection = parameters.allowsMultipleSelection
         open.canChooseDirectories = parameters.allowsDirectories
-        open.beginSheetModal(for: panel) { response in
+        open.beginSheetModal(for: panel) { [weak self, weak webView] response in
+            guard let self, let webView, webView === self.webView, panel.isVisible else {
+                return completionHandler(nil)
+            }
             completionHandler(response == .OK ? open.urls : nil)
         }
     }
@@ -1079,9 +1339,13 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
-        // Camera and microphone alike: WebKit asks the user (per page load) on chatgpt.com only.
+        // Only the visible provider and its own origin can prompt for camera or microphone.
         // macOS's own TCC prompt also appears once per app (NSCamera/NSMicrophoneUsageDescription).
-        decisionHandler(webView === self.webView && panel?.isVisible == true && origin.protocol == "https" && isProviderHost(origin.host, provider: providers[selectedIndex]) ? .prompt : .deny)
+        let provider = providers[selectedIndex]
+        let allowed = webView === self.webView && panel?.isVisible == true && origin.protocol == "https"
+            && isProviderHost(webView.url?.host, provider: provider)
+            && isProviderHost(origin.host, provider: provider)
+        decisionHandler(allowed ? .prompt : .deny)
     }
 
     // MARK: Downloads (WKDownloadDelegate)
@@ -1090,21 +1354,27 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     /// floating panel, which may be hidden by the time a slow download asks for a destination.
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
                   suggestedFilename: String, completionHandler: @escaping @MainActor (URL?) -> Void) {
-        let destination = Self.uniqueDownloadURL(suggestedFilename: suggestedFilename)
-        downloadDestinations[ObjectIdentifier(download)] = destination
-        log.info("Downloading to \(destination.path, privacy: .public)")
+        let destination = Self.uniqueDownloadURL(suggestedFilename: suggestedFilename, reserved: Set(downloads.values.map(\.destination)))
+        downloads[ObjectIdentifier(download)] = (download, destination)
+        log.info("Download started")
         completionHandler(destination)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        guard let destination = downloadDestinations.removeValue(forKey: ObjectIdentifier(download)) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([destination])
+        guard let destination = downloads.removeValue(forKey: ObjectIdentifier(download))?.destination else { return }
+        guard panel?.isVisible == true else { return }
+        recentDownload = destination
+        updateStatus()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard self?.recentDownload == destination else { return }
+            self?.recentDownload = nil
+            self?.updateStatus()
+        }
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        downloadDestinations.removeValue(forKey: ObjectIdentifier(download))
-        log.error("Download failed: \(error.localizedDescription, privacy: .public)")
-        NSSound.beep()
+        downloads.removeValue(forKey: ObjectIdentifier(download))
+        log.error("Download failed with code \((error as NSError).code)")
     }
 }
 
@@ -1129,10 +1399,10 @@ final class QuickChatPanel: NSPanel {
         onResignKey?()
     }
 
-    /// Local key combo that calls `resetSize()` while the panel is key (default ⌘O).
-    var resetSizeShortcut: Shortcut? = .commandO
-    /// Local key combo that calls `toggleMaximize()` while the panel is key (default ⌘F).
-    var maximizeShortcut: Shortcut? = .commandF {
+    /// Local key combo that calls `resetSize()` while the panel is key.
+    var resetSizeShortcut: Shortcut?
+    /// Local key combo that calls `toggleMaximize()` while the panel is key.
+    var maximizeShortcut: Shortcut? {
         didSet { updateZoomTooltip() }
     }
 
@@ -1253,7 +1523,10 @@ final class QuickChatPanel: NSPanel {
     }
 
     /// Esc (when the page doesn't handle it) hides the panel.
-    override func cancelOperation(_ sender: Any?) { onCancel?() }
+    override func cancelOperation(_ sender: Any?) {
+        guard (firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return }
+        onCancel?()
+    }
 
     /// Fills the screen's visible frame (menu bar and Dock stay visible), or goes back to the
     /// user's frame from before. The panel stays resizable while maximized.
@@ -1327,7 +1600,8 @@ final class QuickChatPanel: NSPanel {
     /// Catches the panel's local shortcuts before the web view sees them. Done here rather
     /// than in `performKeyEquivalent` so combos without ⌘ (e.g. ⌥R, F5) work too.
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, handleLocalShortcut(event) { return }
+        if event.type == .keyDown, (firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
+           handleLocalShortcut(event) { return }
         super.sendEvent(event)
     }
 
@@ -1338,6 +1612,9 @@ final class QuickChatPanel: NSPanel {
     /// combos; a local shortcut saved with one before that still wins, as it's checked first.
     /// Matched by character, like menu key equivalents, so they work on any keyboard layout.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if (firstResponder as? NSTextInputClient)?.hasMarkedText() == true {
+            return super.performKeyEquivalent(with: event)
+        }
         if handleLocalShortcut(event) { return true }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
             if let text = event.charactersIgnoringModifiers, let number = Int(text), (1...9).contains(number) {
@@ -1399,6 +1676,121 @@ private final class ResizeGrip: NSView {
 
 #if DEBUG
 extension QuickChatController {
+    static func runPanelSelfTest() -> Bool {
+        _ = NSApplication.shared
+        let suite = "dev.quickchat.omni.panel-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let controller = QuickChatController(preferences: defaults)
+        let panel = QuickChatPanel(contentRect: NSRect(origin: .zero, size: QuickChatPanel.defaultSize))
+        let stack = NSStackView()
+        panel.contentView = stack
+        controller.panel = panel
+        controller.contentStack = stack
+        defer {
+            controller.tearDown()
+            defaults.removePersistentDomain(forName: suite)
+        }
+
+        print("Checking marked text")
+        let composer = NSTextView()
+        composer.isRichText = false
+        stack.addArrangedSubview(composer)
+        var dismissals = 0
+        panel.onCancel = { dismissals += 1 }
+        guard panel.makeFirstResponder(composer) else { return false }
+        composer.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+        guard composer.hasMarkedText() else { return false }
+        panel.cancelOperation(nil)
+        guard dismissals == 0 else { return false }
+        composer.unmarkText()
+        panel.cancelOperation(nil)
+        guard dismissals == 1 else { return false }
+
+        print("Checking copy and paste")
+        let draft = "Quick Chat 测试"
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        composer.string = draft
+        composer.setSelectedRange(NSRange(location: 0, length: draft.utf16.count))
+        guard composer.writeSelection(to: pasteboard, types: composer.writablePasteboardTypes),
+              pasteboard.string(forType: .string) == draft else {
+            print("Copy did not write the selection")
+            return false
+        }
+        composer.string = ""
+        composer.setSelectedRange(NSRange(location: 0, length: 0))
+        guard composer.readSelection(from: pasteboard), composer.string == draft else {
+            print("Paste did not restore the selection")
+            return false
+        }
+        stack.removeArrangedSubview(composer)
+        composer.removeFromSuperview()
+
+        print("Checking WebKit setup")
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        let original = WKWebView(frame: .zero, configuration: config)
+        let alternate = WKWebView(frame: .zero, configuration: config)
+        let first = controller.selectedIndex
+        let firstKey = controller.providers[first].key
+        let secondKey = controller.providers[1].key
+        controller.parkedPages[firstKey] = ParkedPage(view: original, parkedAt: .now)
+        controller.parkedPages[secondKey] = ParkedPage(view: alternate, parkedAt: .now)
+        panel.orderFrontRegardless()
+        controller.attachSelectedPage()
+        guard controller.webView === original, panel.isVisible else { return false }
+
+        print("Checking fixture load")
+        original.loadHTMLString("<form onsubmit='sent++; return false'><textarea id='draft'></textarea><button>Send</button></form><script>let sent = 0;</script>", baseURL: nil)
+        func evaluate(_ script: String) -> String? {
+            var result: String?
+            var done = false
+            original.evaluateJavaScript(script) { value, _ in
+                result = value as? String
+                done = true
+            }
+            let deadline = Date.now.addingTimeInterval(5)
+            while !done && Date.now < deadline { RunLoop.current.run(until: Date.now.addingTimeInterval(0.05)) }
+            return result
+        }
+        let deadline = Date.now.addingTimeInterval(10)
+        while original.isLoading && Date.now < deadline { RunLoop.current.run(until: Date.now.addingTimeInterval(0.05)) }
+        guard evaluate("document.querySelector('#draft').value = '测试草稿'") == "测试草稿" else { return false }
+        controller.selectProvider(1)
+        guard controller.webView === alternate else { return false }
+        print("Checking switch back")
+        controller.selectProvider(first)
+        guard controller.webView === original,
+              evaluate("document.querySelector('#draft').value + ':' + sent") == "测试草稿:0" else { return false }
+
+        print("Checking hide and retain")
+        controller.hide(restoreFocus: false)
+        guard controller.webView == nil, !panel.isVisible,
+              controller.parkedPages[firstKey]?.view === original else { return false }
+        controller.selectProvider(1)
+        guard controller.webView == nil else { return false }
+        print("Checking parked failure")
+        let failed = URL(string: "https://example.com/retry")!
+        controller.pageFailed(alternate, error: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet,
+            userInfo: [NSURLErrorFailingURLErrorKey: failed]))
+        panel.orderFrontRegardless()
+        controller.attachSelectedPage()
+        guard controller.webView === alternate, controller.failureURL == failed else { return false }
+        print("Checking immediate release")
+        controller.retentionMinutes = 0
+        controller.hide(restoreFocus: false)
+        guard controller.webView == nil, controller.parkedPages.isEmpty,
+              controller.evictionTimer == nil else { return false }
+
+        print("Checking frame recovery")
+        panel.setFrameOrigin(NSPoint(x: 60_000, y: 60_000))
+        controller.keepPanelReachable(panel)
+        guard NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) else { return false }
+        print("Panel checks passed: marked text, copy and paste, WebKit draft retention, switching, hide and expiry, parked failure, off-screen recovery")
+        return true
+    }
+
     static func runCacheSelfTest() -> Bool {
         _ = NSApplication.shared
         guard ProviderAddress.matchesWebsite(host: "perplexity.ai", baseHost: "www.perplexity.ai"),
@@ -1428,7 +1820,7 @@ extension QuickChatController {
         let before = controller.providers.count
         controller.deleteProvider(controller.selectedIndex)
         guard controller.providers.count == before - 1, controller.chatURL != selected else { return false }
-        guard controller.addWebsite("ChatGPT", address: selected.absoluteString) else { return false }
+        guard controller.addWebsite("ChatGPT", address: selected.absoluteString, fetchIcon: false) else { return false }
         let first = controller.providers.firstIndex(where: { $0.url == selected })!
         controller.toggleProvider(first)
         guard controller.chatURL != selected else { return false }
@@ -1460,12 +1852,9 @@ extension QuickChatController {
         controller.deleteProvider(controller.providers.firstIndex(where: { $0.key == secondPin.key })!)
         defaults.set(false, forKey: "pinnedFirst")
         guard !controller.providers[controller.enabledTabIndices[0]].isPinned else { return false }
-        controller.visitedURLs[instantKey] = sessionURL
-        controller.visitedURLs[pinnedKey] = sessionURL
         controller.parkedPages[instantKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast)
         controller.parkedPages[pinnedKey] = ParkedPage(view: WKWebView(), parkedAt: .distantPast)
         controller.prunePages(minutes: 0)
-        guard controller.visitedURLs[instantKey] == nil, controller.savedSessions.first?.conversationURL == sessionURL else { return false }
         let hiddenPin = controller.providers.firstIndex(where: { $0.key == pinnedKey })!
         controller.toggleProvider(hiddenPin)
         let beforeUnpin = controller.providers[controller.selectedIndex].key

@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 final class ChatSettingsFields: ObservableObject {
     @Published var name = ""
@@ -32,6 +33,9 @@ struct ChatSettingsView: View {
     let setPinnedFirst: (Bool) -> Void
     let language: String
     let setLanguage: (String) -> Void
+    let loginStatus: SMAppService.Status
+    let setLaunchAtLogin: (Bool) -> Void
+    let editEntry: (Int) -> Void
     let refreshIcon: (URL) -> Void
     let clearWebsiteData: () -> Void
     let clearingWebsiteData: Bool
@@ -87,6 +91,12 @@ struct ChatSettingsView: View {
                 Text(provider.url.host ?? "").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
+            if provider.custom || provider.pinned {
+                Button { editEntry(provider.index) } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.plain)
+                    .help(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
+                    .accessibilityLabel(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
+            }
             if provider.custom {
                 Button { refreshIcon(provider.url) } label: {
                     Image(systemName: "arrow.clockwise")
@@ -147,6 +157,12 @@ struct ChatSettingsView: View {
 
     private var general: some View {
         Form {
+            Toggle(AppText.t("Launch at Login"), isOn: Binding(
+                get: { loginStatus == .enabled || loginStatus == .requiresApproval },
+                set: { setLaunchAtLogin($0) }))
+            if loginStatus == .requiresApproval {
+                Button(AppText.t("Approve in Login Items…")) { SMAppService.openSystemSettingsLoginItems() }
+            }
             Section(AppText.t("Web Pages")) {
                 Picker(AppText.t("Language"), selection: Binding(get: { language }, set: { setLanguage($0) })) {
                     Text("English").tag("en")
@@ -156,10 +172,12 @@ struct ChatSettingsView: View {
                 Text(AppText.t("New pages use this language. A website's own saved language can take priority."))
                     .font(.caption).foregroundStyle(.secondary)
                 Button(AppText.t("Reload open chats…"), action: reloadPages)
-                Picker(AppText.t("Keep inactive pages"), selection: Binding(get: { retention }, set: { setRetention($0) })) {
+                Picker(AppText.t("Keep hidden and inactive pages"), selection: Binding(get: { retention }, set: { setRetention($0) })) {
                     Text(AppText.t("Release immediately")).tag(0)
                     ForEach([1, 5, 10, 30], id: \.self) { Text("\($0) " + AppText.t("min")).tag($0) }
                 }
+                Text(AppText.t("Releasing a page keeps sign-ins and pinned links. Unsent text or an ongoing reply may be lost."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section(AppText.t("Shortcuts")) {
                 ForEach(shortcutControls) { control in

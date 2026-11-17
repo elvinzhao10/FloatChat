@@ -21,16 +21,16 @@ Quick Chat Omni brings the chat websites you already use into a small, movable m
 
 - **Switch by logo.** Hover for names, or use **⌘1–9**. Instant chats sit on the left and pinned conversations on the right, separated by a thin line. Swipe or use the mouse wheel to move along the strip; the scrollbar stays hidden.
 - **Make it yours.** Open Settings directly to add a website, hide or remove tabs, and drag them into your preferred order. You can drag the logos in the popup too.
-- **Keep quick chats quick.** Instant tabs preserve their live page for 10 minutes by default, then start fresh. Choose immediate release or 1, 5, 10 or 30 minutes in Settings.
+- **Keep quick chats quick.** Hidden and inactive pages keep their live state for up to 10 minutes by default. Choose immediate release or 1, 5, 10 or 30 minutes in Settings. Releasing a page can discard unsent text or interrupt a reply.
 - **Keep a conversation.** Pin a chat to remember its URL after the live page expires or the app quits. Pins remember links, not unsent drafts.
 - **Instant and pinned stay separate.** Each website has one instant slot. Pin a conversation to move it to the pinned side, then use the website’s instant slot for another quick chat. Unpin closes the saved tab and leaves the instant chat untouched. Hover shows only the topic. All tabs of a service share its sign-in.
 - **Move freely.** Drag empty space at the top, resize from the corner, or double-click the header to expand and restore.
 - **Continue in your browser.** The arrow button opens the current page in your default browser. Browser sign-in is separate.
-- **Bring your files.** Use a website's upload button, paste an image, or drop a screenshot/file into its upload area when that website supports it.
+- **Bring your files.** Use a website's upload button, paste an image, or drop a screenshot/file into its upload area when that website supports it. Downloads go to Downloads. Click **Show in Finder** in the panel to reveal the completed file.
 
 <p align="center"><img src="docs/images/websites.png" width="370" alt="Chats settings with draggable rows and inline website creation"> <img src="docs/images/general.png" width="370" alt="General settings for language, page retention, and shortcuts"></p>
 
-**Settings.** Open the sliders button or choose **Settings…** from the menu bar. Use **Chats** to manage websites, pinned conversations, and their order. Use **General** to set page retention, configure shortcuts, or choose English, Simplified Chinese, or System Default. Websites can give priority to their own saved language. **Switch Chat** in the menu bar lists both instant and pinned chats.
+**Settings.** Open the sliders button or choose **Settings…** from the menu bar. Use **Chats** to manage websites, pinned conversations, and their order. You can edit custom websites or rename a pin there. Use **General** to set page retention, launch at login, configure shortcuts, or choose English, Simplified Chinese, or System Default. Websites can give priority to their own saved language. **Switch Chat** in the menu bar lists instant and pinned chats. Right-click a tab to check its hostname or adjust the website zoom.
 
 
 ### Install
@@ -68,4 +68,4 @@ Run `QUICKCHAT_SELFTEST=pages swift run QuickChat` for provider and cache checks
 
 Based on [shuaibird/Quick-Chat](https://github.com/shuaibird/Quick-Chat), with its MIT license and attribution preserved. Provider names and logos belong to their owners; no affiliation is implied.
 
-See the [project TODO](TODO.md) for planned improvements.
+See the [version history](CHANGELOG.md) for release notes.

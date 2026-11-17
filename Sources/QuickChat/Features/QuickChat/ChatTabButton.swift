@@ -3,6 +3,8 @@ import AppKit
 /// Flat native control with a selection underline and local drag reordering.
 final class ChatTabButton: NSButton, NSDraggingSource {
     private static let dragType = NSPasteboard.PasteboardType("dev.quickchat.omni.chat-tab")
+    var contextMenu: (() -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() }
     var tabKey = ""
     var pinned = false
     var onReorder: ((String, String) -> Void)?

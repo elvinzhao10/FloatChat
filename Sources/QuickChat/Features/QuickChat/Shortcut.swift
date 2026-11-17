@@ -158,13 +158,20 @@ struct Shortcut: Codable, Equatable {
     static func load() -> Shortcut { load(key: defaultsKey, fallback: .optionSpace) }
     func save() { save(key: Self.defaultsKey) }
 
-    /// The Reset Window Size shortcut (works only while the Quick Chat panel is focused).
-    static func loadResetSize() -> Shortcut { load(key: resetSizeDefaultsKey, fallback: .commandO) }
-    func saveAsResetSize() { save(key: Self.resetSizeDefaultsKey) }
+    static func loadResetSize() -> Shortcut? { loadOptional(resetSizeDefaultsKey) }
+    static func loadMaximize() -> Shortcut? { loadOptional(maximizeDefaultsKey) }
+    static func saveResetSize(_ shortcut: Shortcut?) { saveOptional(shortcut, key: resetSizeDefaultsKey) }
+    static func saveMaximize(_ shortcut: Shortcut?) { saveOptional(shortcut, key: maximizeDefaultsKey) }
 
-    /// The Maximize / Restore Size shortcut (works only while the Quick Chat panel is focused).
-    static func loadMaximize() -> Shortcut { load(key: maximizeDefaultsKey, fallback: .commandF) }
-    func saveAsMaximize() { save(key: Self.maximizeDefaultsKey) }
+    private static func loadOptional(_ key: String) -> Shortcut? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(Shortcut.self, from: data)
+    }
+
+    private static func saveOptional(_ shortcut: Shortcut?, key: String) {
+        if let shortcut { shortcut.save(key: key) }
+        else { UserDefaults.standard.removeObject(forKey: key) }
+    }
 
     private static func load(key: String, fallback: Shortcut) -> Shortcut {
         guard let data = UserDefaults.standard.data(forKey: key),

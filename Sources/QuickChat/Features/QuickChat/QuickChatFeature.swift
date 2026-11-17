@@ -76,10 +76,10 @@ final class QuickChatFeature: Feature {
             self?.shortcut = new
         }, onResetSizeChange: { [weak self] new in
             self?.chat.resetSizeShortcut = new
-            new.saveAsResetSize()
+            Shortcut.saveResetSize(new)
         }, onMaximizeChange: { [weak self] new in
             self?.chat.maximizeShortcut = new
-            new.saveAsMaximize()
+            Shortcut.saveMaximize(new)
         }, onClose: { [weak self] in
             guard let self else { return }
             guard self.isEnabled else {
@@ -99,11 +99,11 @@ final class QuickChatFeature: Feature {
                 // Keep the shortcuts distinct after reverting.
                 if self.chat.resetSizeShortcut == previous {
                     self.chat.resetSizeShortcut = previousResetSize
-                    previousResetSize.saveAsResetSize()
+                    Shortcut.saveResetSize(previousResetSize)
                 }
                 if self.chat.maximizeShortcut == previous {
                     self.chat.maximizeShortcut = previousMaximize
-                    previousMaximize.saveAsMaximize()
+                    Shortcut.saveMaximize(previousMaximize)
                 }
                 try? self.registerHotKey()
                 NSApp.activate()

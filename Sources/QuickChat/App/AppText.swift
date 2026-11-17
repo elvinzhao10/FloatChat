@@ -26,6 +26,16 @@ enum AppText {
         return text
     }
     private static let chinese: [String: String] = [
+        "Keep hidden and inactive pages": "保留隐藏和闲置的页面",
+        "Releasing a page keeps sign-ins and pinned links. Unsent text or an ongoing reply may be lost.": "释放页面会保留登录状态和固定链接。未发送的文字可能丢失，正在生成的回复可能中断。",
+        "Launch at Login": "登录时启动", "Approve in Login Items…": "在登录项中允许…",
+        "Couldn’t change Launch at Login.": "无法更改登录时启动设置。",
+        "Check for Updates…": "检查更新…", "Edit Website": "编辑网站",
+        "Rename Pinned Chat": "重命名已固定的聊天", "Save": "保存",
+        "Zoom In": "放大", "Zoom Out": "缩小", "Actual Size": "实际大小",
+        "Downloaded": "下载完成", "Show in Finder": "在访达中显示",
+        "Couldn’t load this website.": "无法加载此网站。", "Retry": "重试",
+        "Open in Browser": "在浏览器中打开", "None": "无", "Clear": "清除",
         "Refresh Icon": "刷新图标", "Refreshing Icon…": "正在刷新图标…",
         "Privacy": "隐私", "Clear All Website Sign-ins…": "清除所有网站登录…",
         "Clear all website data?": "清除所有网站数据？",
