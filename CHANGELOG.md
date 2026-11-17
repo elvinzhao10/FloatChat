@@ -10,10 +10,10 @@
 
 ## 0.2.x version corrections
 
-The original packages all reported version 0.2.0. The corrected packages use the version numbers below and were rebuilt from the corresponding source snapshots.
+The original packages all reported version 0.2.0. Each corrected GitHub release has a matching version tag, DMG, ZIP, and checksum file. The original Git tags are retained as source references.
 
 | Corrected version | Original build | Original source tag | Source commit |
 | --- | --- | --- | --- |
-| 0.2.1 | 1 | `v0.2.0` | `0a972ce` |
-| 0.2.2 | 2 | `v0.2.0-build.2` | `07843fc` |
-| 0.2.3 | 3 | `v0.2.0-build.3` | `a64cf7f` |
+| [0.2.1](https://github.com/elvinzhao10/QuickChat-Omni/releases/tag/v0.2.1) | 1 | `v0.2.0` | `0a972ce` |
+| [0.2.2](https://github.com/elvinzhao10/QuickChat-Omni/releases/tag/v0.2.2) | 2 | `v0.2.0-build.2` | `07843fc` |
+| [0.2.3](https://github.com/elvinzhao10/QuickChat-Omni/releases/tag/v0.2.3) | 3 | `v0.2.0-build.3` | `a64cf7f` |

@@ -1,71 +1,71 @@
 <div align="center">
-  <img src="Resources/AppIcon-Omni-1024.png" width="112" alt="Quick Chat Omni logo">
+  <img src="Resources/AppIcon-Omni-1024.png" width="104" alt="Quick Chat Omni app icon">
   <h1>Quick Chat Omni</h1>
-  <p><a href="README.zh-CN.md">简体中文</a></p>
-  <p><strong>Your chat websites. One small floating window.</strong></p>
-  <p>ChatGPT · Claude · DeepSeek · Kimi · Gemini · Perplexity · Copilot · Grok · Your own</p>
-  <p>
-    <a href="https://github.com/elvinzhao10/QuickChat-Omni/releases/latest"><img src="https://img.shields.io/github/v/release/elvinzhao10/QuickChat-Omni?style=flat-square&color=168f91" alt="Latest release"></a>
-    <img src="https://img.shields.io/badge/macOS-14%2B-555?style=flat-square" alt="macOS 14 or later">
-    <img src="https://img.shields.io/badge/Apple_silicon_%2B_Intel-universal-555?style=flat-square" alt="Universal Mac app">
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-555?style=flat-square" alt="MIT license"></a>
-  </p>
-  <p><a href="https://github.com/elvinzhao10/QuickChat-Omni/releases/latest"><strong>Download for Mac →</strong></a></p>
+  <p><strong>Your chat websites in one floating Mac window.</strong></p>
+  <p><a href="https://github.com/elvinzhao10/QuickChat-Omni/releases/latest"><strong>Download for Mac</strong></a> · <a href="README.zh-CN.md">简体中文</a> · <a href="CHANGELOG.md">What’s new</a></p>
+  <p>macOS 14+ · Apple silicon and Intel</p>
+  <p><img src="docs/images/panel.png" width="350" alt="Floating Omni window with provider icons along the top and ChatGPT open"></p>
+  <p>ChatGPT · Claude · DeepSeek · Kimi · Gemini · Perplexity · Copilot · Grok</p>
 </div>
 
-Quick Chat Omni brings the chat websites you already use into a small, movable macOS panel. Pick a logo, sign in on the website, and chat. No API keys or separate AI subscription required by the app; each website's own account and plan still apply.
+## Get started
 
-<p align="center"><img src="docs/images/panel.png" width="400" alt="Quick Chat Omni floating panel with icon-only provider switching"></p>
+1. Download the **DMG**, open it, and drag **Quick Chat Omni** into **Applications**. The ZIP contains the same app.
+2. Open Omni from **Applications**. Use its menu bar icon to reopen the window, or enable the global shortcut in **Settings → General** for **⌥Space** access.
+3. Pick a provider icon and sign in on its website with your existing account. Omni works without API keys.
 
-### A little window that stays out of your way
-
-- **Switch by logo.** Hover for names, or use **⌘1–9**. Instant chats sit on the left and pinned conversations on the right, separated by a thin line. Swipe or use the mouse wheel to move along the strip; the scrollbar stays hidden.
-- **Make it yours.** Open Settings directly to add a website, hide or remove tabs, and drag them into your preferred order. You can drag the logos in the popup too.
-- **Keep quick chats quick.** Hidden and inactive pages keep their live state for up to 10 minutes by default. Choose immediate release or 1, 5, 10 or 30 minutes in Settings. Releasing a page can discard unsent text or interrupt a reply.
-- **Keep a conversation.** Pin a chat to remember its URL after the live page expires or the app quits. Pins remember links, not unsent drafts.
-- **Instant and pinned stay separate.** Each website has one instant slot. Pin a conversation to move it to the pinned side, then use the website’s instant slot for another quick chat. Unpin closes the saved tab and leaves the instant chat untouched. Hover shows only the topic. All tabs of a service share its sign-in.
-- **Move freely.** Drag empty space at the top, resize from the corner, or double-click the header to expand and restore.
-- **Continue in your browser.** The arrow button opens the current page in your default browser. Browser sign-in is separate.
-- **Bring your files.** Use a website's upload button, paste an image, or drop a screenshot/file into its upload area when that website supports it. Downloads go to Downloads. Click **Show in Finder** in the panel to reveal the completed file.
-
-<p align="center"><img src="docs/images/websites.png" width="370" alt="Chats settings with draggable rows and inline website creation"> <img src="docs/images/general.png" width="370" alt="General settings for language, page retention, and shortcuts"></p>
-
-**Settings.** Open the sliders button or choose **Settings…** from the menu bar. Use **Chats** to manage websites, pinned conversations, and their order. You can edit custom websites or rename a pin there. Use **General** to set page retention, launch at login, configure shortcuts, or choose English, Simplified Chinese, or System Default. Websites can give priority to their own saved language. **Switch Chat** in the menu bar lists instant and pinned chats. Right-click a tab to check its hostname or adjust the website zoom.
-
-
-### Install
-
-1. Download the **DMG** from [Releases](https://github.com/elvinzhao10/QuickChat-Omni/releases/latest).
-2. Open it and drag **Quick Chat Omni** into **Applications**.
-3. Open the app and choose a website. Optionally turn on **Enable Global Shortcut** in **Settings → General** for **⌥Space** access.
-
-The ZIP contains the same ready-built app if you prefer to unzip it. Both packages support Apple silicon and Intel Macs running macOS 14 or later.
-
-The community build uses an ad-hoc signature. Apple notarization is unavailable for this build. If macOS blocks the first launch, confirm you downloaded it from this repository’s release page, then go to **System Settings → Privacy & Security → Open Anyway**. Confirm the prompt and open the app. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
-
-<p align="center"><img src="docs/images/menu-bar.png" width="160" alt="Menu bar icon rendered on light and dark backgrounds"></p>
-
-### Small by design
-
-Native Swift, AppKit and WebKit. No Electron runtime, analytics, or background polling. Omni fetches custom icons from the website itself when you add it or choose **Refresh Icon** in **Settings → Chats**. Icon requests use HTTPS and a separate session without your website cookies. Sites without a usable icon get a globe. At most three inactive pages are retained; older pages are released. Choose **Release Immediately** for the lowest retained memory use. Provider websites still consume their own resources, and macOS can reclaim pages under pressure.
-
-Sign in directly on each website. Omni does not import your browser's cookies or collect passwords. Removing a website or tab only removes it from the list; your account and sign-in data are kept. Use **Settings → General → Privacy → Clear All Website Sign-ins…** to remove Omni’s local website data before uninstalling. Turning a website off preserves its login. Dragging the app to Trash leaves its website data on the Mac. Some providers restrict embedded sign-ins or uploads; use **Continue in Browser** if a particular flow is unsupported.
-
-### Remove website data after uninstalling
-
-If you already deleted Omni, reinstall it from the official release and choose **Settings → General → Privacy → Clear All Website Sign-ins…**. Confirm the reset, wait for it to finish, then quit and remove the app again. The reset clears Omni’s website storage and signs out its embedded sessions. Your default browser’s sessions are separate.
-
-If you prefer Finder cleanup, quit any running copy. Press **⇧⌘G** and open `~/Library/WebKit`, then move only the `dev.quickchat.omni` folder to Trash if present. Repeat in `~/Library/HTTPStorages` and `~/Library/Caches` for the same exact folder name. macOS can place website data differently across versions. The in-app reset is the reliable route if you need to clear every Omni login.
+<p><img src="docs/images/menu-bar.png" width="160" alt="Omni’s menu bar icon on light and dark backgrounds"></p>
 
 <details>
-<summary>Build and verification</summary>
+<summary>If macOS blocks the first launch</summary>
 
-With Apple's command-line tools installed, run `make app`. The result is `build/Quick Chat Omni.app`.
-
-Run `QUICKCHAT_SELFTEST=pages swift run QuickChat` for provider and cache checks, and `QUICKCHAT_SELFTEST=keymap swift run QuickChat` for shortcut regression checks. [Release audit](docs/RELEASE-AUDIT.md) records what was verified and the remaining limits.
+The community build uses ad-hoc signing and is distributed without Apple notarization. After trying to open it, verify the download came from the official release page, then choose **System Settings → Privacy & Security → Open Anyway**. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
 
 </details>
 
-Based on [shuaibird/Quick-Chat](https://github.com/shuaibird/Quick-Chat), with its MIT license and attribution preserved. Provider names and logos belong to their owners; no affiliation is implied.
+## Use the floating window
 
-See the [version history](CHANGELOG.md) for release notes.
+| To… | Do this |
+| --- | --- |
+| Switch chats | Click a provider icon or press **⌘1–9**. Scroll the icon strip to reach more tabs. |
+| Keep a conversation | Click the pin to save its link. Instant chats and pins share the same strip, separated by a thin line. Hover a pin for its topic. Unpinning closes the saved tab. |
+| Move or resize | Drag the top edge to move, drag the corner to resize, or double-click the header to expand and restore. |
+| Continue in your browser | Click the arrow to open the current page in your default browser. Use it when a provider requires a browser for sign-in or uploads. |
+| Attach or download a file | Use the site’s upload button, paste, or drag a file in where supported. Completed downloads go to Downloads. Click **Show in Finder** to reveal one. |
+
+## Make it yours
+
+<img src="docs/images/websites.png" width="460" alt="Chats settings showing provider visibility switches and fields for adding a website">
+
+Click the sliders icon in the window or choose **Settings…** from the menu bar.
+
+- **Chats** manages websites and pins. Add an HTTPS website, edit its address, rename a pin, drag to reorder, or hide a website with its switch. Right-click a tab to see its hostname or change its zoom.
+- **General** manages language, launch at login, shortcuts, and page retention. Websites may use their own saved language settings.
+
+## Page retention and sign-ins
+
+Omni uses native Swift, AppKit, and WebKit. It keeps up to three hidden or inactive pages in memory for up to 10 minutes by default. Choose **Release immediately** in **Settings → General** to free inactive pages sooner. Releasing a page may discard unsent text or interrupt a reply. Pinned links and website sign-ins persist.
+
+Omni and your default browser maintain separate sign-in sessions. Hiding or removing a website keeps its local login. Custom icons are fetched directly from the website over HTTPS in a separate session without chat cookies.
+
+<details>
+<summary>Clear website data or uninstall</summary>
+
+Before uninstalling, choose **Settings → General → Privacy → Clear All Website Sign-ins…** and wait for it to finish. This clears local website storage in Omni. If you’ve already moved Omni to Trash, reinstall it from the official release page, run the clear action, then quit and remove it again.
+
+For manual cleanup, quit Omni. In Finder, press **⇧⌘G** and check `~/Library/WebKit`, `~/Library/HTTPStorages`, and `~/Library/Caches`. Move only the folder named `dev.quickchat.omni` to Trash in each location if present. Storage locations vary with macOS version. The in-app reset is the reliable way to clear every Omni sign-in.
+
+</details>
+
+## Project
+
+[Release history](https://github.com/elvinzhao10/QuickChat-Omni/releases) · [Changelog](CHANGELOG.md) · [Release checks](docs/RELEASE-AUDIT.md) · [MIT license](LICENSE)
+
+<details>
+<summary>Build from source</summary>
+
+With Apple’s command-line tools installed, run `make app`. The bundle is built at `build/Quick Chat Omni.app`.
+
+</details>
+
+Based on [shuaibird/Quick-Chat](https://github.com/shuaibird/Quick-Chat). Provider names and logos belong to their respective owners.
