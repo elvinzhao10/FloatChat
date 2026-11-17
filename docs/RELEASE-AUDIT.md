@@ -2,6 +2,10 @@
 
 ## 0.3.2
 
+### Build 9 (local)
+
+- The panel regression covers the footer behind the composer, verifies that the composer stays opaque, and checks that streaming text does not trigger surface sampling.
+
 ### Build 8 (local)
 
 - The provider test retains more than three parked pages and checks independent instant and pin deadlines, immediate release, and migration from the old shared duration.

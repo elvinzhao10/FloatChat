@@ -2,6 +2,10 @@
 
 ## 0.3.2
 
+### Build 9
+
+- The full-width backdrop behind the composer follows the translucency setting. The composer and text stay opaque. Background updates are scoped to the visible page’s layout.
+
 ### Build 8
 
 - Instant chats and pinned conversations have separate retention timers with no count limit. Instant chats start fresh after expiry. Pins reopen the saved conversation.

@@ -573,77 +573,105 @@ final class FloatChatController: NSObject {
 
         let script = #"""
             (() => {
-                globalThis.floatChatCanvas?.stop();
+                const previous = globalThis.floatChatCanvas;
+                previous?.stop();
                 const marker = 'data-floatchat-canvas';
                 const translucent = \#(translucent);
+                const root = document.documentElement;
+                let marked = previous?.surfaces ?? new Set();
                 let watched = new Set();
-                let pending = false;
-                let stopped = false;
-                const update = () => {
+                let pending = null;
+                const schedule = () => {
+                    if (pending !== null) return;
+                    pending = setTimeout(() => {
+                        pending = null;
+                        update(false);
+                    }, 40);
+                };
+                const observer = translucent ? new MutationObserver(schedule) : null;
+
+                const update = readColor => {
                     let sheet = document.getElementById('floatchat-canvas');
-                    if (sheet?.sheet) sheet.sheet.disabled = true;
-                    document.querySelectorAll('[' + marker + ']').forEach(node => node.removeAttribute(marker));
+                    if (readColor && sheet?.sheet) sheet.sheet.disabled = true;
                     const surfaces = new Set();
-                    watched = new Set([document.documentElement, document.body]);
-                    const sample = y => [0.08, 0.5, 0.92].map(position => {
+                    const roots = new Set([root]);
+                    if (document.body) roots.add(document.body);
+                    const geometry = new Map();
+                    const colors = new Map();
+
+                    const sample = (y, sampleColor) => [0.08, 0.5, 0.92].map(position => {
                         let sampled = null;
                         let node = document.elementFromPoint(Math.floor(innerWidth * position), y);
                         while (node) {
-                            const size = node.getBoundingClientRect();
+                            if (!geometry.has(node)) geometry.set(node, node.getBoundingClientRect());
+                            const size = geometry.get(node);
                             const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
-                            const topStrip = size.width >= innerWidth * 0.98 && size.top <= 1 && size.bottom >= 1
-                                && size.height <= innerHeight * 0.25;
-                            if (canvas || topStrip) {
-                                watched.add(node);
+                            const fullWidth = size.left <= 2 && size.right >= innerWidth - 2;
+                            const top = fullWidth && size.top <= 1 && size.bottom > 1 && size.height <= innerHeight * 0.25;
+                            const bottom = fullWidth && size.top < innerHeight - 2 && size.bottom >= innerHeight - 2
+                                && !node.matches('button, input, textarea, [contenteditable], [role="dialog"]');
+                            if (canvas || top || bottom) {
                                 surfaces.add(node);
-                                const color = getComputedStyle(node).backgroundColor;
-                                if (!sampled && /^rgb\(/.test(color)) sampled = color.match(/[0-9.]+/g)?.map(Number);
+                                if (sampleColor && !sampled) {
+                                    if (!colors.has(node)) {
+                                        const color = getComputedStyle(node).backgroundColor;
+                                        colors.set(node, /^rgb\(/.test(color) ? color.match(/[0-9.]+/g)?.map(Number) : null);
+                                    }
+                                    sampled = colors.get(node);
+                                }
                             }
                             node = node.parentElement;
                         }
                         return sampled;
                     });
-                    const top = sample(1);
-                    const middle = translucent ? sample(Math.floor(innerHeight * 0.42)) : [];
+
+                    const top = sample(1, readColor);
+                    const middle = translucent ? sample(Math.floor(innerHeight * 0.42), readColor) : [];
                     if (translucent) {
-                        sample(Math.floor(innerHeight * 0.75));
-                        for (const surface of surfaces) surface.setAttribute(marker, '');
-                        if (!sheet) {
+                        sample(Math.floor(innerHeight * 0.75), false);
+                        sample(innerHeight - 2, false);
+                        for (const node of marked) {
+                            if (!surfaces.has(node)) node.removeAttribute(marker);
+                        }
+                        for (const node of surfaces) {
+                            if (!marked.has(node)) node.setAttribute(marker, '');
+                            for (let parent = node; parent && !roots.has(parent); parent = parent.parentElement) roots.add(parent);
+                        }
+                        marked = surfaces;
+                        if (!sheet && root) {
                             sheet = document.createElement('style');
                             sheet.id = 'floatchat-canvas';
                             sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }';
-                            (document.head || document.documentElement)?.append(sheet);
+                            (document.head || root).append(sheet);
                         }
-                        if (sheet.sheet) sheet.sheet.disabled = false;
+                        if (sheet?.sheet) sheet.sheet.disabled = false;
+                        if (roots.size !== watched.size || [...roots].some(node => !watched.has(node))) {
+                            observer.disconnect();
+                            for (const node of roots) {
+                                if (node) observer.observe(node, { childList: true, attributes: true, attributeFilter: ['class', 'style'] });
+                            }
+                            watched = roots;
+                        }
                     } else {
+                        for (const node of marked) node.removeAttribute(marker);
                         sheet?.remove();
                     }
-                    const consensus = colors => colors.find(color =>
-                        color && colors.filter(other => String(other) === String(color)).length > 1);
+                    const consensus = entries => entries.find(color =>
+                        color && entries.filter(other => String(other) === String(color)).length > 1);
                     return consensus(middle) ?? consensus(top) ?? null;
                 };
-                const color = update();
-                if (translucent && document.documentElement) {
-                    const schedule = () => {
-                        if (pending) return;
-                        pending = true;
-                        queueMicrotask(() => {
-                            pending = false;
-                            if (!stopped) update();
-                        });
-                    };
-                    const observer = new MutationObserver(records => {
-                        if (records.some(record => watched.has(record.target))) schedule();
-                    });
-                    observer.observe(document.documentElement, {
-                        childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style']
-                    });
+
+                const color = update(true);
+                if (translucent) {
                     window.addEventListener('resize', schedule);
-                    globalThis.floatChatCanvas = { stop() {
-                        observer.disconnect();
-                        window.removeEventListener('resize', schedule);
-                        stopped = true;
-                    }};
+                    globalThis.floatChatCanvas = {
+                        get surfaces() { return marked; },
+                        stop() {
+                            observer.disconnect();
+                            window.removeEventListener('resize', schedule);
+                            if (pending !== null) clearTimeout(pending);
+                        }
+                    };
                 } else {
                     delete globalThis.floatChatCanvas;
                 }
@@ -2210,11 +2238,11 @@ extension FloatChatController {
         let fixture = "<form onsubmit='sent++; return false'><textarea id='draft'></textarea><button>Send</button></form><script>let sent = 0;</script>"
         original.loadHTMLString(fixture, baseURL: URL(string: "https://example.com/"))
         alternate.loadHTMLString(fixture, baseURL: nil)
-        func evaluate(_ script: String, in page: WKWebView) -> String? {
+        func evaluate(_ script: String, in page: WKWebView, world: WKContentWorld = .page) -> String? {
             var result: String?
             var done = false
-            page.evaluateJavaScript(script) { value, _ in
-                result = value as? String
+            page.evaluateJavaScript(script, in: nil, in: world) { outcome in
+                if case .success(let value) = outcome { result = value as? String }
                 done = true
             }
             let deadline = Date.now.addingTimeInterval(5)
@@ -2256,16 +2284,51 @@ extension FloatChatController {
         print("Checking translucency after a client-side conversation layout change")
         if original.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
             controller.setPanelTranslucency(32)
-            let canvasStyle = "position:fixed;inset:0;background-color:rgb(20,30,40)"
-            let opening = "document.body.insertAdjacentHTML('beforeend', '<main id=canvas style=\"\(canvasStyle)\"><h1>New chat</h1></main>'); 'done'"
-            let background = "getComputedStyle(document.querySelector('#canvas')).backgroundColor + ':' + getComputedStyle(document.querySelector('#canvas h1')).opacity"
-            guard evaluate(opening, in: original) == "done",
-                  waitForValue("rgba(0, 0, 0, 0):1", in: original, script: background) else { return false }
-            let conversation = "document.querySelector('#canvas').outerHTML = '<main id=canvas style=\"\(canvasStyle)\"><h1>Conversation</h1></main>'; 'done'"
-            guard evaluate(conversation, in: original) == "done",
-                  waitForValue("rgba(0, 0, 0, 0):1", in: original, script: background) else { return false }
+            let layout = """
+                <main id="canvas" style="position:fixed;inset:0;background-color:rgb(20,30,40)">
+                  <h1>New chat</h1><section><p id="stream"></p></section>
+                </main>
+                <footer id="foot" style="position:fixed;inset:auto 0 0;height:105px;background-color:rgb(45,50,55)">
+                  <textarea id="composer" style="display:block;margin:6px auto;width:90%;background-color:rgb(60,65,70)">Sample</textarea>
+                </footer>
+                """
+            let encodedLayout = String(decoding: try! JSONEncoder().encode(layout), as: UTF8.self)
+            let background = """
+                ['#canvas', '#foot', '#composer'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor)
+                    .concat(getComputedStyle(document.querySelector('#composer')).opacity).join(':')
+                """
+            let translucent = "rgba(0, 0, 0, 0):rgba(0, 0, 0, 0):rgb(60, 65, 70):1"
+            guard evaluate("document.body.insertAdjacentHTML('beforeend', \(encodedLayout)); 'done'", in: original) == "done",
+                  waitForValue(translucent, in: original, script: background) else { return false }
+
+            let replacement = """
+                document.querySelector('#canvas').remove();
+                document.querySelector('#foot').remove();
+                document.body.insertAdjacentHTML('beforeend', \(encodedLayout));
+                'done'
+                """
+            guard evaluate(replacement, in: original) == "done",
+                  waitForValue(translucent, in: original, script: background) else { return false }
+
+            print("Checking that streaming text does not resample the page surfaces")
+            let instrument = """
+                globalThis.fixtureSurfaceReads = 0;
+                const actualHitTest = document.elementFromPoint.bind(document);
+                document.elementFromPoint = (...args) => {
+                    globalThis.fixtureSurfaceReads++;
+                    return actualHitTest(...args);
+                };
+                'ready'
+                """
+            guard evaluate(instrument, in: original, world: .defaultClient) == "ready",
+                  evaluate("for (let i = 0; i < 100; i++) document.querySelector('#stream').append('x'); 'done'", in: original) == "done"
+                  else { return false }
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.2))
+            guard evaluate("String(globalThis.fixtureSurfaceReads)", in: original, world: .defaultClient) == "0" else { return false }
+
             controller.setPanelTranslucency(0)
-            guard waitForValue("rgb(20, 30, 40):1", in: original, script: background) else { return false }
+            guard waitForValue("rgb(20, 30, 40):rgb(45, 50, 55):rgb(60, 65, 70):1", in: original, script: background)
+                  else { return false }
         }
 
         print("Checking independent Settings and chat windows")
