@@ -334,7 +334,7 @@ struct KeymapOverride {
 
         let current = snap.entries.filter { Self.command(of: $0) == target.commandID }
         guard snap.exists, current.count == 1, isOurs(current[0]) else {
-            log.notice("\(target.commandID, privacy: .public) entry was changed outside Quick Chat; leaving keymap as is")
+            log.notice("\(target.commandID, privacy: .public) entry was changed outside FloatChat; leaving keymap as is")
             state.backup = nil
             try saveState(state)
             return .userChangedEntry

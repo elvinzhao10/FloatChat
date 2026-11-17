@@ -1,17 +1,25 @@
-APP_NAME := Quick Chat Omni
+APP_NAME := FloatChat
 APP      := build/$(APP_NAME).app
 PREFIX   ?= /Applications
 DEST     := $(PREFIX)/$(APP_NAME).app
 
 # Quit any running copy (any bundle id/location). SIGTERM makes the app restore ChatGPT's keymap.
-QUIT := pkill -x QuickChat && while pgrep -xq QuickChat; do sleep 0.2; done; true
+QUIT := pkill -x FloatChat && while pgrep -xq FloatChat; do sleep 0.2; done; true
 
-.PHONY: app build run install uninstall clean
+SWIFT_BUILD_FLAGS ?=
+
+.PHONY: app build check run install uninstall clean
 
 app:
 	./scripts/build-app.sh
 
 build: app
+
+check:
+	@set -e; for script in scripts/*.sh; do bash -n "$$script"; done
+	swift build $(SWIFT_BUILD_FLAGS)
+	@set -e; bin="$$(swift build $(SWIFT_BUILD_FLAGS) --show-bin-path)/FloatChat"; \
+	for mode in pages language shortcuts keymap panel; do FLOATCHAT_SELFTEST="$$mode" "$$bin"; done
 
 run: app
 	@$(QUIT)

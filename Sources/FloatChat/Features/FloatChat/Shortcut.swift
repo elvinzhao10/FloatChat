@@ -10,9 +10,9 @@ struct Shortcut: Codable, Equatable {
     var keyLabel: String?
 
     static let optionSpace = Shortcut(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(optionKey))
-    /// Default local shortcut for resetting the Quick Chat panel's size.
+    /// Default local shortcut for resetting the FloatChat panel's size.
     static let commandO = Shortcut(keyCode: UInt32(kVK_ANSI_O), carbonModifiers: UInt32(cmdKey), keyLabel: "O")
-    /// Default local shortcut for maximizing / restoring the Quick Chat panel.
+    /// Default local shortcut for maximizing / restoring the FloatChat panel.
     static let commandF = Shortcut(keyCode: UInt32(kVK_ANSI_F), carbonModifiers: UInt32(cmdKey), keyLabel: "F")
 
     init(keyCode: UInt32, carbonModifiers: UInt32, keyLabel: String? = nil) {
@@ -154,7 +154,7 @@ struct Shortcut: Codable, Equatable {
     /// Local (panel-focused) shortcut for Maximize / Restore Size.
     private static let maximizeDefaultsKey = "quickChat.maximizeShortcut"
 
-    /// The global Quick Chat toggle shortcut.
+    /// The global FloatChat toggle shortcut.
     static func load() -> Shortcut { load(key: defaultsKey, fallback: .optionSpace) }
     func save() { save(key: Self.defaultsKey) }
 

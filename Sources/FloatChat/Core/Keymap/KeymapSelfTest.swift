@@ -2,7 +2,7 @@
 import Foundation
 
 /// Headless self-test of the keymap overrides. Run a debug build with:
-///   QUICKCHAT_SELFTEST=keymap .build/debug/QuickChat
+///   FLOATCHAT_SELFTEST=keymap .build/debug/FloatChat
 /// Works only on temp directories (CODEX_HOME is pointed at a temp dir); never touches ~/.codex.
 @MainActor
 enum KeymapSelfTest {
@@ -185,7 +185,7 @@ enum KeymapSelfTest {
         } catch { check(false, "case 7 threw", "\(error)") }
 
 
-        print("8. Show Mini controller: reasons + Quick Chat shortcut conflicts")
+        print("8. Show Mini controller: reasons + FloatChat shortcut conflicts")
         do {
             let (km, _) = fresh()
             let mini = ShowMiniController(keymap: km)

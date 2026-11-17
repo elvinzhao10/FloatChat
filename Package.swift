@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "QuickChat",
+    name: "FloatChat",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "QuickChat",
-            path: "Sources/QuickChat"
+            name: "FloatChat",
+            path: "Sources/FloatChat"
         ),
     ]
 )

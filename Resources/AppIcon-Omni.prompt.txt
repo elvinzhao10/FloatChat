@@ -1,3 +1,0 @@
-Generated with the built-in imagegen tool.
-
-Create one elegant native macOS app icon for QuickChat Omni, with true transparent canvas margins. A flat near-black charcoal rounded square tile centered at 80% canvas width, and a single warm ivory speech bubble mark, an outlined circular speech bubble with its short angular tail at lower right and a single solid round dot inside. Restrained, high contrast, timeless, precise geometry, optical centering, crisp silhouette recognizable at 16px. Absolutely no purple, no gradients, no sparkles, no lettering, no mockup, no visible environment. Square composition.

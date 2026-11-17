@@ -1,22 +1,22 @@
 import AppKit
 
-/// Quick Chat: a global shortcut (default ⌥Space, changeable) toggles a floating
+/// FloatChat: a global shortcut (default ⌥Space, changeable) toggles a floating
 /// panel running chatgpt.com, in the spirit of ChatGPT Classic's companion chat.
 ///
 /// If the shortcut is the same as ChatGPT's Show Mini shortcut, Show Mini is unbound
 /// (through `ShowMiniController`) while this feature is on, so the two don't fight.
 @MainActor
-final class QuickChatFeature: Feature {
+final class FloatChatFeature: Feature {
     let id = "miniChat" // pre-rename id; persisted, keep
     var title: String { AppText.t("Enable Global Shortcut") }
     private(set) var isEnabled = false
 
-    private let log = Log.make("QuickChat")
+    private let log = Log.make("FloatChat")
     private let showMini: ShowMiniController
     private var shortcut = Shortcut.load()
     private var hotKey: GlobalHotKey?
-    private lazy var chat: QuickChatController = {
-        let controller = QuickChatController()
+    private lazy var chat: FloatChatController = {
+        let controller = FloatChatController()
         controller.shortcutControls = { [weak self] in self?.shortcutControls?() ?? [] }
         controller.configureShortcut = { [weak self] in self?.editShortcut() }
         return controller

@@ -25,7 +25,7 @@ final class MenuController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: AppText.t("Quit Quick Chat Omni"),
+        menu.addItem(NSMenuItem(title: AppText.t("Quit FloatChat"),
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: ""))
     }

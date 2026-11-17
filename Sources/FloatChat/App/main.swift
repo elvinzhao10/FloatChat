@@ -2,26 +2,26 @@ import AppKit
 
 MainActor.assumeIsolated {
     #if DEBUG
-    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "language" {
-        exit(QuickChatController.runLanguageSelfTest() ? 0 : 1)
+    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "language" {
+        exit(FloatChatController.runLanguageSelfTest() ? 0 : 1)
     }
-    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "shortcuts" {
+    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "shortcuts" {
         exit(GlobalHotKey.runAvailabilitySelfTest() ? 0 : 1)
     }
-    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "panel" {
-        exit(QuickChatController.runPanelSelfTest() ? 0 : 1)
+    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "panel" {
+        exit(FloatChatController.runPanelSelfTest() ? 0 : 1)
     }
-    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "pages" {
-        exit(QuickChatController.runCacheSelfTest() ? 0 : 1)
+    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "pages" {
+        exit(FloatChatController.runCacheSelfTest() ? 0 : 1)
     }
-    if ProcessInfo.processInfo.environment["QUICKCHAT_SELFTEST"] == "keymap" {
+    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "keymap" {
         exit(KeymapSelfTest.run() ? 0 : 1)
     }
-    // Opens Quick Chat panel without enabling any feature (no keymap changes).
-    if ProcessInfo.processInfo.environment["QUICKCHAT_DEBUG"] == "panel" {
+    // Opens FloatChat panel without enabling any feature (no keymap changes).
+    if ProcessInfo.processInfo.environment["FLOATCHAT_DEBUG"] == "panel" {
         AppText.applyOwnLanguage()
         EditMenu.install()
-        let chat = QuickChatController()
+        let chat = FloatChatController()
         let previewRecorder = ShortcutRecorderWindow()
         chat.configureShortcut = { [weak chat] in
             guard let chat else { return }

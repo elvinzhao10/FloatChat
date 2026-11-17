@@ -1,4 +1,6 @@
-# Quick Chat Omni 0.3.0 release checks
+# FloatChat release checks
+
+## 0.3.0 (Quick Chat Omni)
 
 ## Local checks
 
@@ -8,7 +10,7 @@
 - The panel test uses an isolated preferences suite, nonpersistent WebKit pages, and a temporary pasteboard. It exercises the marked-text dismissal guard, native text copy and paste, preservation of an unsent WebKit draft across a switch, hidden selection without attaching a page, and immediate release when hiding. It also verifies the error state of a parked page and recovery of a frame placed outside the visible displays.
 - The language tests read navigator language from a real WebKit document in English and Simplified Chinese. The shortcut tests exercise registration conflicts and reserved keys. The inherited keymap tests cover opt-in ChatGPT shortcut integration and rollback.
 - Source review covered camera and microphone shutdown during hide and switch, permission prompts limited to the selected visible website, HTTPS main-frame navigation, and rechecking the selected view when an upload picker closes. WebKit performs TLS verification.
-- Download destinations have unique names within Omni and remain associated with each active download across tab changes. Completion offers a brief Finder action when the panel is visible. Download logging records events and error codes.
+- Download destinations have unique names within FloatChat and remain associated with each active download across tab changes. Completion offers a brief Finder action when the panel is visible. Download logging records events and error codes.
 - The Grok mark is bundled. Custom favicons are retrieved with a separate cookieless HTTPS session, resized and cached locally. Both READMEs describe clearing website sign-ins before uninstalling and removing local data afterward.
 
 ## Installed-app checks
@@ -20,7 +22,7 @@
 ## Remaining manual coverage
 
 - In a signed-in WebKit composer using Simplified Chinese Pinyin, type a syllable. Press Escape to dismiss composition, press Escape again to hide, then reopen. Copy and paste a draft with ⌘C and ⌘V, switch providers with ⌘1–9, and confirm the original draft stays unsent and intact.
-- Open the panel from a different app, type immediately, change Spaces, and return. Click another application during the transition and confirm Omni leaves it focused. Close Omni from the foreground and verify focus returns to the previous app. Move it to an external monitor and disconnect that monitor.
+- Open the panel from a different app, type immediately, change Spaces, and return. Click another application during the transition and confirm FloatChat leaves it focused. Close FloatChat from the foreground and verify focus returns to the previous app. Move it to an external monitor and disconnect that monitor.
 - Start camera or microphone capture on a supported website. Switch tabs, hide, and reopen. Capture should stop and a website must ask the user to start it again.
 - Download an attachment while the panel is visible and again while it is hidden. Check Downloads and confirm Finder opens only after **Show in Finder** is clicked. Try two concurrent downloads with the same suggested name.
 - Try a real provider redirect, sign-in, passkey, screenshot drop, and file upload. Use the default browser where a provider restricts the embedded experience. Browser handoff opens the current URL and browser sign-in is separate.

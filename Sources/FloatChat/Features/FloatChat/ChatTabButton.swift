@@ -61,7 +61,7 @@ final class ChatTabScrollView: NSScrollView {
         reflectScrolledClipView(contentView)
     }
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2, let panel = window as? QuickChatPanel { panel.titleBarDoubleClicked(event) }
+        if event.clickCount == 2, let panel = window as? FloatChatPanel { panel.titleBarDoubleClicked(event) }
         else { window?.performDrag(with: event) }
     }
 }

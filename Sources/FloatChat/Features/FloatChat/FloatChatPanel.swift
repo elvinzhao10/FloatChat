@@ -3,10 +3,10 @@ import WebKit
 import SwiftUI
 import ServiceManagement
 
-/// Floating Quick Chat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
+/// Floating FloatChat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
 /// web view, which uses its compact layout at this width.
 @MainActor
-final class QuickChatController: NSObject, NSWindowDelegate {
+final class FloatChatController: NSObject, NSWindowDelegate {
     private struct Provider: Codable {
         var name: String
         var url: URL
@@ -106,7 +106,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
         let settings = ActionMenuItem(AppText.t("Settings…")) { [weak self] in self?.showSettings() }
         let updates = ActionMenuItem(AppText.t("Check for Updates…")) {
-            NSWorkspace.shared.open(URL(string: "https://github.com/elvinzhao10/QuickChat-Omni/releases/latest")!)
+            NSWorkspace.shared.open(URL(string: "https://github.com/elvinzhao10/FloatChat/releases/latest")!)
         }
         return [open, switchChat, .separator(), settings, updates]
     }
@@ -226,7 +226,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard !clearingWebsiteData, let settingsWindow else { return }
         let alert = NSAlert()
         alert.messageText = AppText.t("Clear all website data?")
-        alert.informativeText = AppText.t("This signs out every website in Omni and discards open drafts. Your website list and pinned links are kept.")
+        alert.informativeText = AppText.t("This signs out every website in FloatChat and discards open drafts. Your website list and pinned links are kept.")
         alert.addButton(withTitle: AppText.t("Cancel"))
         alert.addButton(withTitle: AppText.t("Clear Website Data")).hasDestructiveAction = true
         alert.beginSheetModal(for: settingsWindow) { [weak self] response in
@@ -429,6 +429,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private func parkActivePage() {
         guard let view = webView else { return }
         let key = providers[selectedIndex].key
+        panel?.detachKeyboardFromPage(view)
         contentStack?.removeArrangedSubview(view)
         view.removeFromSuperview()
         view.setAllMediaPlaybackSuspended(true)
@@ -457,11 +458,17 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         updateWebsiteIdentity()
         updateStatus()
         if cached == nil { view.load(pageRequest(chatURL)) }
-        panel?.makeFirstResponder(view)
+        focusSelectedPage()
     }
 
     @objc private func providerChanged(_ sender: NSButton) {
-        if sender.tag == selectedIndex { sender.state = .on; sender.needsDisplay = true; return }
+        panel?.makeKey()
+        if sender.tag == selectedIndex {
+            sender.state = .on
+            sender.needsDisplay = true
+            focusSelectedPage()
+            return
+        }
         selectProvider(sender.tag)
     }
     @objc private func goBack(_ sender: Any?) { webView?.goBack() }
@@ -718,6 +725,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             }
             // Unpin closes the saved tab. It never replaces or discards an existing instant page.
             if let view = webView {
+                panel?.detachKeyboardFromPage(view)
                 contentStack?.removeArrangedSubview(view)
                 view.removeFromSuperview()
                 releasePage(view)
@@ -747,8 +755,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private static let safariUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
 
-    private let log = Log.make("QuickChat")
-    private var panel: QuickChatPanel?
+    private let log = Log.make("FloatChat")
+    private var panel: FloatChatPanel?
     private var webView: WKWebView?
     private var previousApp: NSRunningApplication?
     /// When the panel was last shown / last lost key, and until when a Space switch may not
@@ -794,8 +802,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         // Space switch macOS hands focus on to another app (Finder, the full-screen app) and the
         // panel loses the keyboard. A non-activating panel takes key without it, like Spotlight.
         panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(webView)
-        focusComposer()
+        focusSelectedPage()
         shownAt = .now
     }
 
@@ -846,7 +853,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             guard let self, let until = self.keepFocusUntil, Date.now < until,
                   let panel = self.panel, panel.isVisible, panel.isOnActiveSpace, !panel.isKeyWindow else { return }
             panel.makeKeyAndOrderFront(nil)
-            panel.makeFirstResponder(self.webView)
+            self.focusSelectedPage()
         }
     }
 
@@ -890,8 +897,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
     // MARK: Building
 
-    private func makePanel() -> QuickChatPanel {
-        let panel = QuickChatPanel(contentRect: NSRect(origin: .zero, size: QuickChatPanel.defaultSize))
+    private func makePanel() -> FloatChatPanel {
+        let panel = FloatChatPanel(contentRect: NSRect(origin: .zero, size: FloatChatPanel.defaultSize))
         panel.onCancel = { [weak self] in self?.hide(restoreFocus: true) }
         panel.onGoBack = { [weak self] in self?.webView?.goBack() }
         panel.onGoForward = { [weak self] in self?.webView?.goForward() }
@@ -990,10 +997,10 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
 
 
-        if !panel.setFrameUsingName(QuickChatPanel.autosaveName) {
+        if !panel.setFrameUsingName(FloatChatPanel.autosaveName) {
             center(panel)
         }
-        panel.setFrameAutosaveName(QuickChatPanel.autosaveName)
+        panel.setFrameAutosaveName(FloatChatPanel.autosaveName)
 
         self.panel = panel
         refreshPicker()
@@ -1153,11 +1160,19 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     })();
     """
 
+    private func focusSelectedPage() {
+        guard let panel, let webView, webView.window === panel else { return }
+        panel.keyboardPage = webView
+        panel.focusKeyboardPage()
+        focusComposer()
+    }
+
     private func focusComposer() {
         // Best effort: chatgpt.com's composer is a contenteditable #prompt-textarea.
         webView?.evaluateJavaScript("""
-            if (document.activeElement === document.body || document.activeElement == null) {
-                document.querySelector('#prompt-textarea')?.focus()
+            const active = document.activeElement;
+            if (!active?.isContentEditable && !active?.matches('input, textarea, select, iframe')) {
+                document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea')?.focus();
             }
             """)
     }
@@ -1204,7 +1219,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
 // MARK: - WebKit delegates
 
-extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
+extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
     /// `window.open` / target=_blank: opens in the panel, unless `opensInBrowser` sends it to the browser.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
@@ -1278,7 +1293,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         failureURL = nil
         updateStatus()
         updateWebsiteIdentity()
-        if panel?.isKeyWindow == true { focusComposer() }
+        if panel?.isKeyWindow == true { focusSelectedPage() }
         rememberPinnedPage()
         refreshPicker()
     }
@@ -1380,7 +1395,7 @@ extension QuickChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
 
 // MARK: - Panel
 
-final class QuickChatPanel: NSPanel {
+final class FloatChatPanel: NSPanel {
     static let autosaveName = "MiniChat.Panel" // pre-rename name; keeps the saved frame
     /// Default content size (also the "reset size" target): a 3:4 portrait panel. Anything under
     /// 640 wide gets chatgpt.com's compact (mobile) layout; 420 sits between Classic's 440-wide
@@ -1393,6 +1408,21 @@ final class QuickChatPanel: NSPanel {
     /// ⌘[ / ⌘] while the panel is key: the browsers' Back and Forward.
     var onGoBack: (() -> Void)?
     var onGoForward: (() -> Void)?
+    weak var keyboardPage: WKWebView?
+
+    private func keyboardBelongs(to page: WKWebView) -> Bool {
+        (firstResponder as? NSView)?.isDescendant(of: page) == true
+    }
+
+    func detachKeyboardFromPage(_ page: WKWebView) {
+        if keyboardBelongs(to: page) { makeFirstResponder(nil) }
+        if keyboardPage === page { keyboardPage = nil }
+    }
+
+    func focusKeyboardPage() {
+        guard let page = keyboardPage, page.window === self, !keyboardBelongs(to: page) else { return }
+        makeFirstResponder(page)
+    }
 
     override func resignKey() {
         super.resignKey()
@@ -1425,7 +1455,7 @@ final class QuickChatPanel: NSPanel {
         super.init(contentRect: contentRect,
                    styleMask: [.borderless, .resizable, .nonactivatingPanel],
                    backing: .buffered, defer: false)
-        title = "Quick Chat Omni"
+        title = "FloatChat"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         // .fullScreenAuxiliary lets the panel show over another app's full-screen Space. Don't add
@@ -1600,8 +1630,15 @@ final class QuickChatPanel: NSPanel {
     /// Catches the panel's local shortcuts before the web view sees them. Done here rather
     /// than in `performKeyEquivalent` so combos without ⌘ (e.g. ⌥R, F5) work too.
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, (firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
-           handleLocalShortcut(event) { return }
+        if event.type == .keyDown {
+            // A retained WebKit responder can outlive its window attachment.
+            if let view = firstResponder as? NSView, view.window !== self {
+                makeFirstResponder(nil)
+                focusKeyboardPage()
+            }
+            if (firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
+               handleLocalShortcut(event) { return }
+        }
         super.sendEvent(event)
     }
 
@@ -1636,7 +1673,7 @@ private final class DraggableView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2, let panel = window as? QuickChatPanel {
+        if event.clickCount == 2, let panel = window as? FloatChatPanel {
             panel.titleBarDoubleClicked(event)
             return
         }
@@ -1675,13 +1712,13 @@ private final class ResizeGrip: NSView {
 }
 
 #if DEBUG
-extension QuickChatController {
+extension FloatChatController {
     static func runPanelSelfTest() -> Bool {
         _ = NSApplication.shared
         let suite = "dev.quickchat.omni.panel-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
-        let controller = QuickChatController(preferences: defaults)
-        let panel = QuickChatPanel(contentRect: NSRect(origin: .zero, size: QuickChatPanel.defaultSize))
+        let controller = FloatChatController(preferences: defaults)
+        let panel = FloatChatPanel(contentRect: NSRect(origin: .zero, size: FloatChatPanel.defaultSize))
         let stack = NSStackView()
         panel.contentView = stack
         controller.panel = panel
@@ -1708,7 +1745,7 @@ extension QuickChatController {
         guard dismissals == 1 else { return false }
 
         print("Checking copy and paste")
-        let draft = "Quick Chat 测试"
+        let draft = "FloatChat 测试"
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         composer.string = draft
@@ -1737,16 +1774,18 @@ extension QuickChatController {
         let secondKey = controller.providers[1].key
         controller.parkedPages[firstKey] = ParkedPage(view: original, parkedAt: .now)
         controller.parkedPages[secondKey] = ParkedPage(view: alternate, parkedAt: .now)
-        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
         controller.attachSelectedPage()
         guard controller.webView === original, panel.isVisible else { return false }
 
         print("Checking fixture load")
-        original.loadHTMLString("<form onsubmit='sent++; return false'><textarea id='draft'></textarea><button>Send</button></form><script>let sent = 0;</script>", baseURL: nil)
-        func evaluate(_ script: String) -> String? {
+        let fixture = "<form onsubmit='sent++; return false'><textarea id='draft'></textarea><button>Send</button></form><script>let sent = 0;</script>"
+        original.loadHTMLString(fixture, baseURL: nil)
+        alternate.loadHTMLString(fixture, baseURL: nil)
+        func evaluate(_ script: String, in page: WKWebView) -> String? {
             var result: String?
             var done = false
-            original.evaluateJavaScript(script) { value, _ in
+            page.evaluateJavaScript(script) { value, _ in
                 result = value as? String
                 done = true
             }
@@ -1755,14 +1794,36 @@ extension QuickChatController {
             return result
         }
         let deadline = Date.now.addingTimeInterval(10)
-        while original.isLoading && Date.now < deadline { RunLoop.current.run(until: Date.now.addingTimeInterval(0.05)) }
-        guard evaluate("document.querySelector('#draft').value = '测试草稿'") == "测试草稿" else { return false }
+        while (original.isLoading || alternate.isLoading) && Date.now < deadline {
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
+        }
+        let value = "document.querySelector('#draft').value + ':' + sent"
+        func typeTestKey() -> Bool {
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: panel.windowNumber, context: nil, characters: "q", charactersIgnoringModifiers: "q",
+                isARepeat: false, keyCode: 12) else { return false }
+            panel.sendEvent(event)
+            return true
+        }
+        func waitForValue(_ expected: String, in page: WKWebView) -> Bool {
+            let deadline = Date.now.addingTimeInterval(3)
+            repeat {
+                if evaluate(value, in: page) == expected { return true }
+                RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
+            } while Date.now < deadline
+            return false
+        }
+        controller.focusSelectedPage()
+        guard evaluate("document.querySelector('#draft').value = '测试草稿'", in: original) == "测试草稿" else { return false }
         controller.selectProvider(1)
-        guard controller.webView === alternate else { return false }
-        print("Checking switch back")
+        guard controller.webView === alternate,
+              typeTestKey(), waitForValue("q:0", in: alternate),
+              evaluate(value, in: original) == "测试草稿:0" else { return false }
+        print("Checking keyboard delivery after switching back")
         controller.selectProvider(first)
         guard controller.webView === original,
-              evaluate("document.querySelector('#draft').value + ':' + sent") == "测试草稿:0" else { return false }
+              typeTestKey(), waitForValue("测试草稿q:0", in: original),
+              evaluate(value, in: alternate) == "q:0" else { return false }
 
         print("Checking hide and retain")
         controller.hide(restoreFocus: false)
@@ -1799,7 +1860,7 @@ extension QuickChatController {
         let suite = "dev.quickchat.omni.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let controller = QuickChatController(preferences: defaults)
+        let controller = FloatChatController(preferences: defaults)
         let selected = controller.chatURL
         defaults.set("zh-Hans", forKey: "appLanguage")
         guard controller.pageRequest(selected).value(forHTTPHeaderField: "Accept-Language") == "zh-CN,zh;q=0.9" else { return false }
@@ -1807,7 +1868,7 @@ extension QuickChatController {
         guard controller.pageRequest(selected).value(forHTTPHeaderField: "Accept-Language") == "en-US,en;q=0.9" else { return false }
         controller.reorderProviders(IndexSet(integer: 0), to: 3)
         guard controller.chatURL == selected, controller.providers[2].url == selected else { return false }
-        let restored = QuickChatController(preferences: defaults)
+        let restored = FloatChatController(preferences: defaults)
         guard restored.providers[2].url == selected else { return false }
         guard controller.addWebsite("Example", address: "EXAMPLE.com", fetchIcon: false),
               !controller.addWebsite("Duplicate", address: "https://example.com:443/"),
@@ -1834,7 +1895,7 @@ extension QuickChatController {
         guard controller.savedSessions.count == 1 else { return false }
         let pinnedKey = controller.providers[controller.selectedIndex].key
         guard pinnedKey != instantKey else { return false }
-        let persisted = QuickChatController(preferences: defaults)
+        let persisted = FloatChatController(preferences: defaults)
         guard persisted.providers.contains(where: { $0.key == pinnedKey && $0.conversationURL == sessionURL }) else { return false }
         var secondPin = controller.savedSessions[0]
         secondPin.sessionID = UUID().uuidString
@@ -1847,7 +1908,7 @@ extension QuickChatController {
         controller.reorderProviders(IndexSet(integer: secondIndex), to: firstIndex)
         guard controller.providers[controller.enabledTabIndices[0]].key == secondPin.key,
               controller.providers[controller.selectedIndex].key == pinnedKey else { return false }
-        let restoredGroups = QuickChatController(preferences: defaults)
+        let restoredGroups = FloatChatController(preferences: defaults)
         guard restoredGroups.pinnedFirst, restoredGroups.providers[restoredGroups.enabledTabIndices[0]].key == secondPin.key else { return false }
         controller.deleteProvider(controller.providers.firstIndex(where: { $0.key == secondPin.key })!)
         defaults.set(false, forKey: "pinnedFirst")
@@ -1879,16 +1940,16 @@ extension QuickChatController {
 #endif
 
 #if DEBUG
-extension QuickChatController {
+extension FloatChatController {
     @MainActor
     private final class LanguageScriptProbe: NSObject, WKNavigationDelegate {
-        let controller: QuickChatController
+        let controller: FloatChatController
         let defaults: UserDefaults
         let view: WKWebView
         var step = 0
         var finished = false
         var passed = true
-        init(controller: QuickChatController, defaults: UserDefaults) {
+        init(controller: FloatChatController, defaults: UserDefaults) {
             self.controller = controller
             self.defaults = defaults
             let config = WKWebViewConfiguration()
@@ -1920,7 +1981,7 @@ extension QuickChatController {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("en", forKey: "appLanguage")
-        let controller = QuickChatController(preferences: defaults)
+        let controller = FloatChatController(preferences: defaults)
         let probe = LanguageScriptProbe(controller: controller, defaults: defaults)
         probe.view.loadHTMLString("<p>Locale check one</p>", baseURL: nil)
         let deadline = Date.now.addingTimeInterval(15)

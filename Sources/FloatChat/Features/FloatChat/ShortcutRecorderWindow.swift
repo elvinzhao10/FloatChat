@@ -1,7 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Small window for choosing Quick Chat Omni's shortcuts: the global toggle and the local
+/// Small window for choosing FloatChat's shortcuts: the global toggle and the local
 /// (panel-focused) Reset Window Size and Maximize. The caller unregisters its global hotkey while this is
 /// open (otherwise the current shortcut would be swallowed).
 @MainActor
@@ -52,7 +52,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
         showRules()
 
         hint.stringValue = miniShortcut.map {
-            "ChatGPT's Show Mini uses \($0).\nChoosing the same shortcut turns Show Mini off while Quick Chat Omni is on."
+            "ChatGPT's Show Mini uses \($0).\nChoosing the same shortcut turns Show Mini off while FloatChat is on."
         } ?? AppText.t("ChatGPT Mini has no shortcut assigned. Other apps may still use a combination.")
         let window = makeWindow()
         self.window = window
@@ -79,7 +79,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// Standard editing, window and navigation combos (see `EditMenu`, `QuickChatPanel`);
+    /// Standard editing, window and navigation combos (see `EditMenu`, `FloatChatPanel`);
     /// taking one would break it in the panel, or everywhere for the global shortcut. Matched
     /// by key character, as menu key equivalents are, so they hold on any keyboard layout.
     private static let reserved: [(key: String, modifiers: Int, name: String)] = [
@@ -100,7 +100,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
             return "\(new.displayString) is \(combo.name).\nPick another combo."
         }
         let names: [(RecorderField, String)] = [
-            (recorder, "the Quick Chat Omni shortcut"), (resetSizeRecorder, "Reset Window Size"), (maximizeRecorder, "Maximize"),
+            (recorder, "the FloatChat shortcut"), (resetSizeRecorder, "Reset Window Size"), (maximizeRecorder, "Maximize"),
         ]
         if let name = names.first(where: { $0.0 !== field && $0.0.shortcut == new })?.1 {
             return "\(new.displayString) is already \(name). Pick another combination."
@@ -112,7 +112,7 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
     private func makeWindow() -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 424, height: 292), // refit in show()
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = AppText.t("Quick Chat Omni Shortcuts")
+        window.title = AppText.t("FloatChat Shortcuts")
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.delegate = self
@@ -124,15 +124,15 @@ final class ShortcutRecorderWindow: NSObject, NSWindowDelegate {
             field.setAccessibilityValue(field.shortcut?.displayString ?? AppText.t("None"))
             field.setAccessibilityHelp(AppText.t("Click, then press a key combination to record a shortcut."))
         }
-        let label = Self.sectionLabel("Quick Chat Omni", detail: "Opens Quick Chat Omni from any app.")
+        let label = Self.sectionLabel("FloatChat", detail: "Opens FloatChat from any app.")
         let reset = NSButton(title: AppText.t("Reset to") + " ⌥Space", target: self, action: #selector(resetToDefault))
         let row = NSStackView(views: [recorder, reset])
         let resetSizeLabel = Self.sectionLabel("Reset Window Size",
-                                               detail: "Works only while Quick Chat Omni is focused.")
+                                               detail: "Works only while FloatChat is focused.")
         let resetSizeReset = NSButton(title: AppText.t("Clear"), target: self, action: #selector(resetResetSizeToDefault))
         let resetSizeRow = NSStackView(views: [resetSizeRecorder, resetSizeReset])
         let maximizeLabel = Self.sectionLabel("Maximize / Restore Size",
-                                              detail: "Works only while Quick Chat Omni is focused.")
+                                              detail: "Works only while FloatChat is focused.")
         let maximizeReset = NSButton(title: AppText.t("Clear"), target: self, action: #selector(resetMaximizeToDefault))
         let maximizeRow = NSStackView(views: [maximizeRecorder, maximizeReset])
         for button in [reset, resetSizeReset, maximizeReset] {

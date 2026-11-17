@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds "build/Quick Chat Omni.app" from the SwiftPM executable and codesigns it.
+# Builds "build/FloatChat.app" from the SwiftPM executable and codesigns it.
 #
 # Environment overrides:
 #   BUNDLE_ID          CFBundleIdentifier            (default: dev.quickchat.omni)
@@ -12,8 +12,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="Quick Chat Omni"
-EXECUTABLE="QuickChat" # SwiftPM product name
+APP_NAME="FloatChat"
+EXECUTABLE="FloatChat" # SwiftPM product name
+# Preserve the existing preferences and WebKit website data across the rename.
 BUNDLE_ID="${BUNDLE_ID:-dev.quickchat.omni}"
 VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || true)}"
 VERSION="${VERSION#v}"
@@ -31,11 +32,11 @@ swift build ${SWIFT_FLAGS}
 BIN_DIR="$(swift build ${SWIFT_FLAGS} --show-bin-path)"
 
 echo "==> Assembling ${APP} (${BUNDLE_ID} ${VERSION} (${BUILD_NUMBER}))"
-rm -rf "${APP}" "build/Quick Chat for ChatGPT.app" # also drop the bundle built under the old name
+rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN_DIR}/${EXECUTABLE}" "${APP}/Contents/MacOS/${EXECUTABLE}"
 cp -R Resources/Providers "${APP}/Contents/Resources/Providers"
-cp Resources/AppIcon-Omni.icns "${APP}/Contents/Resources/AppIcon.icns" # regenerate with scripts/make-icon.sh
+cp Resources/AppIcon-FloatChat.icns "${APP}/Contents/Resources/AppIcon.icns" # regenerate with scripts/make-icon.sh
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -78,6 +79,6 @@ case "${IDENTITY}" in "Developer ID Application"*) TIMESTAMP="--timestamp" ;; es
 
 echo "==> codesign (identity: ${IDENTITY})"
 codesign --force --options runtime ${TIMESTAMP} \
-  --entitlements scripts/QuickChat.entitlements --sign "${IDENTITY}" "${APP}"
+  --entitlements scripts/FloatChat.entitlements --sign "${IDENTITY}" "${APP}"
 codesign --verify --strict --verbose=1 "${APP}"
 echo "==> Built ${APP}"

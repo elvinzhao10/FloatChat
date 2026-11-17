@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuController: MenuController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Log.app.info("QuickChat launched")
+        Log.app.info("FloatChat launched")
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
@@ -19,16 +19,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuController = controller
 
         manager.start()
-        (manager.features.first as? QuickChatFeature)?.show()
+        (manager.features.first as? FloatChatFeature)?.show()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        (manager.features.first as? QuickChatFeature)?.show()
+        (manager.features.first as? FloatChatFeature)?.show()
         return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        Log.app.info("QuickChat terminating; restoring ChatGPT state")
+        Log.app.info("FloatChat terminating; restoring ChatGPT state")
         manager.disableAll()
     }
 }

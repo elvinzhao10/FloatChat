@@ -3,7 +3,7 @@ import AppKit
 /// Single owner of ChatGPT's Show Mini keymap entry (`openAvatarOverlay`, default ⌥Space).
 ///
 /// Several features can ask for Mini to be unbound: the user's "Disable Show Mini" toggle,
-/// and Quick Chat when its shortcut is the same as Mini's. Mini is unbound while at least
+/// and FloatChat when its shortcut is the same as Mini's. Mini is unbound while at least
 /// one reason is active and restored once none are (see research/02-show-mini.md).
 /// ChatGPT reads the keymap only at launch, so changes need a ChatGPT restart, which is
 /// offered from the menu but never done automatically.

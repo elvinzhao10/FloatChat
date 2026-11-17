@@ -3,10 +3,10 @@ import AppKit
 /// User toggle that unbinds ChatGPT's Show Mini keyboard shortcut through
 /// `ShowMiniController`. Show Mini itself stays usable from ChatGPT's UI.
 ///
-/// While Quick Chat uses Mini's shortcut, Mini is unbound regardless, so the checkbox
+/// While FloatChat uses Mini's shortcut, Mini is unbound regardless, so the checkbox
 /// shows ticked and locked with a greyed status line explaining why. `isEnabled` still
 /// tracks only the user's own choice (`.userDisabled`), which is untouched by the lock
-/// and takes effect again once Quick Chat releases the shortcut.
+/// and takes effect again once FloatChat releases the shortcut.
 @MainActor
 final class DisableShowMiniFeature: Feature {
     let id = "disableShowMini"
@@ -21,10 +21,10 @@ final class DisableShowMiniFeature: Feature {
         return "\(base) (\(keys))"
     }
 
-    /// Mini is unbound because Quick Chat uses the same shortcut.
-    private var lockedByQuickChat: Bool { showMini.reasons.contains(.quickChatShortcut) }
+    /// Mini is unbound because FloatChat uses the same shortcut.
+    private var lockedByFloatChat: Bool { showMini.reasons.contains(.quickChatShortcut) }
 
-    var isChecked: Bool { isEnabled || lockedByQuickChat }
+    var isChecked: Bool { isEnabled || lockedByFloatChat }
 
     /// Whether the ChatGPT desktop app is installed. Uses LaunchServices (the same lookup
     /// `ChatGPTApp.launch()` relies on) plus a file check to drop stale entries for a
@@ -35,21 +35,21 @@ final class DisableShowMiniFeature: Feature {
     }
 
     /// Nothing to toggle without ChatGPT; and unchecking couldn't restore Mini while
-    /// Quick Chat holds its shortcut.
-    var canToggle: Bool { chatGPTInstalled && !lockedByQuickChat }
+    /// FloatChat holds its shortcut.
+    var canToggle: Bool { chatGPTInstalled && !lockedByFloatChat }
 
     var statusText: String? {
         guard chatGPTInstalled else { return "ChatGPT app not installed" }
-        guard lockedByQuickChat else { return nil }
-        guard let keys = showMini.userShortcutDescription else { return "On while Quick Chat uses this shortcut" }
-        return "On while Quick Chat uses \(keys)"
+        guard lockedByFloatChat else { return nil }
+        guard let keys = showMini.userShortcutDescription else { return "On while FloatChat uses this shortcut" }
+        return "On while FloatChat uses \(keys)"
     }
 
     /// "Restart ChatGPT to Apply / to Restore Show Mini" while the running ChatGPT still
     /// has an outdated keymap, shown on or off (turning off needs a restart too). While
-    /// Quick Chat holds Mini's shortcut it shows this item itself, so it appears only once.
+    /// FloatChat holds Mini's shortcut it shows this item itself, so it appears only once.
     func menuItems() -> [NSMenuItem] {
-        guard !lockedByQuickChat, let restart = showMini.restartMenuItem() else { return [] }
+        guard !lockedByFloatChat, let restart = showMini.restartMenuItem() else { return [] }
         return [restart]
     }
 
