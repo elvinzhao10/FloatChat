@@ -2,6 +2,10 @@
 
 ## 0.3.2
 
+### Build 12 (local)
+
+- The WebKit fixture covers an inset footer behind a rounded composer and verifies that the input remains opaque.
+
 ### Build 11 (local)
 
 - The native panel test covers typing after tab switches, writing-suggestion settings on focus, translucent drawer tint without a WebKit backdrop filter, and zero surface scans during simulated streaming. All five local suites passed.

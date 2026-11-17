@@ -623,6 +623,8 @@ final class FloatChatController: NSObject {
                     if (document.body) roots.add(document.body);
                     const geometry = new Map();
                     const colors = new Map();
+                    const insetBackdrops = new Map();
+                    const edgeInset = 16;
                     const modalNavigation = new Map();
                     const navigation = 'aside, nav, [role="navigation"], [role="complementary"]';
 
@@ -645,7 +647,18 @@ final class FloatChatController: NSObject {
                                     && size.width < innerWidth * 0.9 && size.height >= innerHeight * 0.65;
                                 const top = fullWidth && size.top <= 1 && size.bottom > 1 && size.height <= innerHeight * 0.25;
                                 const bottom = fullWidth && size.top < innerHeight - 2 && size.bottom >= innerHeight - 2;
-                                if ((canvas || pane || top || bottom) && !node.matches('button, input, textarea, [contenteditable]')) {
+                                const insetBottom = !fullWidth && size.left >= -2 && size.left <= edgeInset
+                                    && size.right >= innerWidth - edgeInset && size.right <= innerWidth + 2
+                                    && size.bottom >= innerHeight - edgeInset && size.bottom <= innerHeight + 2
+                                    && size.height >= 24 && size.height <= innerHeight * 0.45;
+                                if (insetBottom && !insetBackdrops.has(node)) {
+                                    const style = getComputedStyle(node);
+                                    // Keep rounded input cards distinct from the flush or inset backing strip.
+                                    insetBackdrops.set(node, ['TopLeft', 'TopRight', 'BottomLeft', 'BottomRight'].every(
+                                        corner => Number.parseFloat(style['border' + corner + 'Radius']) <= 6
+                                    ));
+                                }
+                                if ((canvas || pane || top || bottom || (insetBottom && insetBackdrops.get(node))) && !node.matches('button, input, textarea, [contenteditable]')) {
                                     const modal = node.closest('dialog, [role="dialog"], [aria-modal="true"]');
                                     if (modal) {
                                         if (!modalNavigation.has(modal)) modalNavigation.set(modal, !!modal.querySelector(navigation));
@@ -683,6 +696,7 @@ final class FloatChatController: NSObject {
                     if (translucent) {
                         sample(Math.floor(innerHeight * 0.75), false);
                         sample(innerHeight - 2, false);
+                        sample(Math.max(1, innerHeight - edgeInset), false);
                         for (const node of marked) {
                             if (!surfaces.has(node)) node.removeAttribute(marker);
                         }
@@ -2419,6 +2433,19 @@ extension FloatChatController {
                 """
             guard evaluate(replacement, in: original) == "done",
                   waitForValue(translucent, in: original, script: background) else { return false }
+
+            print("Checking a Claude-style inset composer backdrop")
+            let insetLayout = """
+                const footer = document.querySelector('#foot');
+                footer.style.inset = 'auto 8px 8px';
+                footer.innerHTML = '<div id="card" style="position:absolute;inset:0;background:rgb(50,55,60);border-radius:14px">'
+                    + footer.innerHTML + '</div>';
+                'done'
+                """
+            let insetBackground = "getComputedStyle(document.querySelector('#card')).backgroundColor + ':' + (" + background + ")"
+            guard evaluate(insetLayout, in: original) == "done",
+                  waitForValue("rgb(50, 55, 60):" + translucent, in: original, script: insetBackground)
+                  else { return false }
 
             print("Checking a drawer over a split page")
             let paneMarkup = """

@@ -2,6 +2,10 @@
 
 ## 0.3.2
 
+### Build 12
+
+- Inset composer backdrops, such as Claude’s, blend into the page while rounded input cards stay opaque.
+
 ### Build 11
 
 - Chat switches update existing tab buttons. Writing suggestions are configured on focus, without observing the message stream.
