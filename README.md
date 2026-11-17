@@ -4,6 +4,8 @@
   <p><strong>Your chat websites in one floating Mac window.</strong></p>
   <p><a href="https://github.com/elvinzhao10/FloatChat/releases/latest"><strong>Download for Mac</strong></a> · <a href="README.zh-CN.md">简体中文</a> · <a href="CHANGELOG.md">What’s new</a></p>
   <p>macOS 14+ · Apple silicon and Intel</p>
+  <p>FloatChat packs the chat websites you already use into a small, native macOS window. It uses Swift, AppKit, and the WebKit browser engine built into macOS. Pages are released when they’re idle, and there’s no separate browser runtime to ship.</p>
+  <p>Sign in directly on each website. WebKit keeps FloatChat’s sessions locally, separately from your default browser. FloatChat needs no account or API key of its own. Keep it alongside your other Mac apps, or open the current page in your default browser anytime.</p>
   <p><img src="docs/images/panel.png" width="350" alt="Floating FloatChat window with provider icons along the top and ChatGPT open"></p>
   <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"> <img src="Resources/Providers/doubao.png" width="24" height="24" alt="Doubao"></p>
   <p>Nine built-in providers, including Doubao (豆包), plus any HTTPS chat website you add.</p>
@@ -41,7 +43,9 @@ The community build uses ad-hoc signing and is distributed without Apple notariz
 
 <p align="center"><img src="docs/images/websites.png" width="460" alt="Chats settings with website name, address and add button at the bottom"></p>
 
-Settings can stay open beside the floating window. In **Chats**, drag to reorder, hide sites with their switches, edit custom websites, or rename a pin. Right-click a tab to check its hostname or change its zoom. In **General → Floating Window**, choose the last or default position, hide the window on outside clicks, or turn on a translucent background. macOS 26 and later use Liquid Glass. The whole web page becomes translucent, including its background.
+Settings can stay open beside the floating window. In **Chats**, drag to reorder, hide sites with their switches, click the pencil to change a custom site’s name or address, or rename a pin. Click a custom site’s icon to choose a local image, restore the site’s icon, or refresh it. Right-click a tab to check its hostname or change its zoom. In **General → Floating Window**, choose the last or default position, hide the window on outside clicks, or adjust **Translucency** with a slider. Text and controls stay opaque. macOS 26 and later use Liquid Glass.
+
+<p align="center"><img src="docs/images/general.png" width="460" alt="General settings with the Translucency slider, window position, and click-away switch"></p>
 
 ## Page retention and sign-ins
 

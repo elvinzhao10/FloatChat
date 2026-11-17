@@ -26,7 +26,9 @@ enum AppText {
         return text
     }
     private static let chinese: [String: String] = [
-        "Floating Window": "悬浮窗口", "Translucent background": "半透明背景",
+        "Website Icon": "网站图标", "Choose Icon…": "选取图标…", "Use Website Icon": "使用网站图标",
+        "Couldn’t use this icon.": "无法使用此图标。", "Choose a PNG, JPEG, GIF, ICO, or WebP image under 5 MB.": "请选择小于 5 MB 的 PNG、JPEG、GIF、ICO 或 WebP 图片。",
+        "Floating Window": "悬浮窗口", "Translucency": "透明度",
         "Open window at": "窗口打开位置", "Last position": "上次位置", "Default position": "默认位置",
         "Hide when clicking outside": "点击窗口外时隐藏", "Website Zoom": "网页缩放",
         "Website zoom shortcuts": "网页缩放快捷键", "You’re offline.": "当前没有网络连接。",

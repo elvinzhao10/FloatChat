@@ -3,6 +3,7 @@ import WebKit
 import SwiftUI
 import ServiceManagement
 import Network
+import UniformTypeIdentifiers
 
 /// Floating FloatChat in the spirit of ChatGPT Classic's companion chat: chatgpt.com in a
 /// web view, which uses its compact layout at this width.
@@ -82,18 +83,37 @@ final class FloatChatController: NSObject {
     private var language: String { preferences.string(forKey: "appLanguage") ?? "en" }
     private var settingsWindow: NSWindow?
     private var clearingWebsiteData = false
-    private var glassEnabled: Bool { preferences.bool(forKey: "glassEnabled") }
+    private var panelTranslucency: Double {
+        let legacyValue = preferences.bool(forKey: "glassEnabled") ? 16.0 : 0.0
+        let value = preferences.object(forKey: "panelTranslucency") as? Double ?? legacyValue
+        return min(40, max(0, value))
+    }
+
+    private func setPanelTranslucency(_ value: Double) {
+        let wasTranslucent = panelTranslucency > 0
+        preferences.set(value, forKey: "panelTranslucency")
+        settingsFields.panelTranslucency = panelTranslucency
+        applySurfaceAppearance()
+        if wasTranslucent != (panelTranslucency > 0), let webView { matchPageEdge(webView) }
+    }
+
+    private func applySurfaceAppearance() {
+        let translucency = panelTranslucency
+        // Change only the shared background. Control and web text layers stay opaque.
+        contentStack?.layer?.backgroundColor = surfaceColor.withAlphaComponent(1 - translucency / 100).cgColor
+        let hidden = translucency == 0
+        if glassBackdrop?.isHidden != hidden {
+            glassBackdrop?.isHidden = hidden
+            panel?.invalidateShadow()
+        }
+    }
     private var centerOnOpen: Bool { preferences.bool(forKey: "centerOnOpen") }
     private var hideOnClickAway: Bool { preferences.bool(forKey: "hideOnClickAway") }
     private var zoomKeysEnabled: Bool { preferences.object(forKey: "zoomKeysEnabled") as? Bool ?? true }
 
     private func setPanelPreference(_ enabled: Bool, for key: String) {
         preferences.set(enabled, forKey: key)
-        if key == "glassEnabled" {
-            for page in parkedPages.values { applyPageAppearance(page.view) }
-            if let webView { applyPageAppearance(webView); syncPageChrome(webView) }
-            glassBackdrop?.isHidden = !glassEnabled
-        } else if key == "centerOnOpen" {
+        if key == "centerOnOpen" {
             panel?.remembersFrame = !enabled
         } else if key == "zoomKeysEnabled" {
             panel?.zoomKeysEnabled = enabled
@@ -226,6 +246,7 @@ final class FloatChatController: NSObject {
     }
     func updateSettings() {
         guard let settingsWindow else { return }
+        settingsFields.panelTranslucency = panelTranslucency
         let view = ChatSettingsView(
             fields: settingsFields,
             pinnedFirst: pinnedFirst,
@@ -237,11 +258,13 @@ final class FloatChatController: NSObject {
             loginStatus: SMAppService.mainApp.status,
             setLaunchAtLogin: { [weak self] enabled in self?.setLaunchAtLogin(enabled) },
             editEntry: { [weak self] index in self?.editEntry(index) },
+            chooseIcon: { [weak self] url in self?.chooseIcon(for: url) },
+            resetIcon: { [weak self] url in self?.resetIcon(for: url) },
             refreshIcon: { [weak self] url in self?.refreshFavicon(url) },
             clearWebsiteData: { [weak self] in self?.confirmClearWebsiteData() },
             clearingWebsiteData: clearingWebsiteData,
             reloadPages: { [weak self] in self?.reloadForLanguage() },
-            glassEnabled: glassEnabled,
+            setPanelTranslucency: { [weak self] value in self?.setPanelTranslucency(value) },
             centerOnOpen: centerOnOpen,
             hideOnClickAway: hideOnClickAway,
             zoomKeysEnabled: zoomKeysEnabled,
@@ -344,6 +367,52 @@ final class FloatChatController: NSObject {
         prunePages()
         if let webView { webView.load(pageRequest(webView.url ?? chatURL)) }
     }
+    private func chooseIcon(for url: URL) {
+        guard let settingsWindow else { return }
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.image]
+        picker.canChooseDirectories = false
+        picker.allowsMultipleSelection = false
+        picker.beginSheetModal(for: settingsWindow) { [weak self] response in
+            guard let self, response == .OK, let source = picker.url,
+                  self.customProviders.contains(where: { $0.url == url }) else { return }
+            do {
+                let file = try FileHandle(forReadingFrom: source)
+                defer { try? file.close() }
+                let limit = 5 * 1024 * 1024
+                guard let data = try file.read(upToCount: limit + 1), data.count <= limit,
+                      let png = WebsiteFavicon.rasterPNG(data) else {
+                    self.showIconError()
+                    return
+                }
+                try ProviderIcon.setCustomIcon(png, for: url)
+                self.refreshPicker()
+                self.updateSettings()
+            } catch {
+                self.showIconError()
+            }
+        }
+    }
+
+    private func resetIcon(for url: URL) {
+        do {
+            try ProviderIcon.setCustomIcon(nil, for: url)
+            refreshPicker()
+            updateSettings()
+            refreshFavicon(url)
+        } catch {
+            showIconError()
+        }
+    }
+
+    private func showIconError() {
+        guard let settingsWindow else { return }
+        let alert = NSAlert()
+        alert.messageText = AppText.t("Couldn’t use this icon.")
+        alert.informativeText = AppText.t("Choose a PNG, JPEG, GIF, ICO, or WebP image under 5 MB.")
+        alert.beginSheetModal(for: settingsWindow)
+    }
+
     private func refreshFavicon(_ url: URL) {
         guard refreshingIcons.insert(url).inserted else { return }
         updateSettings()
@@ -447,17 +516,82 @@ final class FloatChatController: NSObject {
 
     private weak var chromeView: NSView?
     private var pageColorObservation: NSKeyValueObservation?
+    private var surfaceColor = NSColor.windowBackgroundColor
 
     /// WebKit reports the page canvas color as it changes, including website theme switches.
     /// Match the native controls to that canvas without changing the site's layout or DOM.
     private func syncPageChrome(_ webView: WKWebView) {
-        let color = webView.underPageBackgroundColor ?? .windowBackgroundColor
-        chromeView?.layer?.backgroundColor = (glassEnabled ? color.withAlphaComponent(0.84) : color).cgColor
+        if let color = webView.underPageBackgroundColor,
+           panelTranslucency == 0 || color.alphaComponent == 1 {
+            setSurfaceColor(color)
+        }
+        matchPageEdge(webView)
+    }
+
+    private func setSurfaceColor(_ color: NSColor) {
+        surfaceColor = color
+        applySurfaceAppearance()
         if let rgb = color.usingColorSpace(.sRGB) {
             let brightness = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
             chromeView?.appearance = NSAppearance(named: brightness < 0.5 ? .darkAqua : .aqua)
         }
     }
+    private func matchPageEdge(_ view: WKWebView) {
+        guard view === webView, let url = view.url else { return }
+        // Older WebKit versions have no public switch for the document's opaque base fill.
+        // Gate the rendering-only setting and keep the page opaque if WebKit lacks it.
+        let canClearBase = view.responds(to: NSSelectorFromString("_setDrawsBackground:"))
+        let translucent = panelTranslucency > 0 && canClearBase
+        if canClearBase, (view.value(forKey: "drawsBackground") as? Bool) != !translucent {
+            view.setValue(!translucent, forKey: "drawsBackground")
+        }
+
+        let script = #"""
+            (() => {
+                const marker = 'data-floatchat-canvas';
+                let sheet = document.getElementById('floatchat-canvas');
+                if (sheet?.sheet) sheet.sheet.disabled = true;
+                document.querySelectorAll('[' + marker + ']').forEach(node => node.removeAttribute(marker));
+                const surfaces = new Set();
+                const colors = [0.08, 0.5, 0.92].map(position => {
+                    let sampled = null;
+                    let node = document.elementFromPoint(Math.floor(innerWidth * position), 1);
+                    while (node) {
+                        const color = getComputedStyle(node).backgroundColor;
+                        const size = node.getBoundingClientRect();
+                        const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
+                        const topStrip = size.width >= innerWidth * 0.98 && size.top <= 1 && size.bottom >= 1
+                            && size.height <= innerHeight * 0.25;
+                        if (canvas || topStrip) {
+                            surfaces.add(node);
+                            if (!sampled && /^rgb\(/.test(color)) sampled = color.match(/[0-9.]+/g)?.map(Number);
+                        }
+                        node = node.parentElement;
+                    }
+                    return sampled;
+                });
+                if (\#(translucent)) {
+                    for (const surface of surfaces) surface.setAttribute(marker, '');
+                    if (!sheet) {
+                        sheet = document.createElement('style');
+                        sheet.id = 'floatchat-canvas';
+                        sheet.textContent = 'html, body, [data-floatchat-canvas] { background-color: transparent !important; }';
+                        (document.head || document.documentElement)?.append(sheet);
+                    }
+                    if (sheet.sheet) sheet.sheet.disabled = false;
+                } else {
+                    sheet?.remove();
+                }
+                return colors.find(color => color && colors.filter(other => String(other) === String(color)).length > 1) ?? null;
+            })()
+            """#
+        view.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self, weak view] result in
+            guard let self, let view, self.webView === view, view.url == url,
+                  case .success(let value) = result, let rgb = value as? [Double], rgb.count == 3 else { return }
+            self.setSurfaceColor(NSColor(srgbRed: rgb[0] / 255, green: rgb[1] / 255, blue: rgb[2] / 255, alpha: 1))
+        }
+    }
+
     private var chatURL: URL { providers[selectedIndex].conversationURL ?? providers[selectedIndex].url }
 
     private func selectProvider(_ index: Int) {
@@ -500,7 +634,6 @@ final class FloatChatController: NSObject {
         failureURL = cached?.failureURL
         view.setAllMediaPlaybackSuspended(false)
         view.pageZoom = zoom(for: providers[selectedIndex])
-        applyPageAppearance(view)
         contentStack.addArrangedSubview(view)
         if let resizeGrip { contentStack.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
         observePageColor(view)
@@ -666,6 +799,7 @@ final class FloatChatController: NSObject {
                 self.preferences.set(key, forKey: "selectedProvider")
                 self.saveCustomProviders()
                 if url != provider.url {
+                    ProviderIcon.copyCustomIcon(from: provider.url, to: url)
                     self.refreshFavicon(url)
                     if self.panel?.isVisible == true { self.attachSelectedPage() }
                 }
@@ -926,6 +1060,7 @@ final class FloatChatController: NSObject {
         // Space switch macOS hands focus on to another app (Finder, the full-screen app) and the
         // panel loses the keyboard. A non-activating panel takes key without it, like Spotlight.
         panel.makeKeyAndOrderFront(nil)
+        panel.invalidateShadow()
         focusSelectedPage()
         shownAt = .now
     }
@@ -1058,8 +1193,6 @@ final class FloatChatController: NSObject {
            let index = providers.firstIndex(where: { $0.key == saved }) { selectedIndex = index }
         if disabledURLs.contains(providers[selectedIndex].key), let next = providers.firstIndex(where: { !disabledURLs.contains($0.key) }) { selectedIndex = next }
         let header = DraggableView()
-        header.wantsLayer = true
-        header.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         chromeView = header
         header.toolTip = "Drag to move · Double-click to expand"
         let tabs = NSStackView()
@@ -1118,27 +1251,29 @@ final class FloatChatController: NSObject {
         stack.edgeInsets = NSEdgeInsets()
         header.heightAnchor.constraint(equalToConstant: 40).isActive = true
         stack.wantsLayer = true
-        stack.layer?.cornerRadius = 16
-        stack.layer?.masksToBounds = true
+        stack.layer?.allowsGroupOpacity = true
+        stack.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         contentStack = stack
+        // Clip the complete window surface so the backdrop and WebKit share one silhouette.
         let root = NSView()
+        root.wantsLayer = true
+        root.layer?.cornerCurve = .continuous
+        root.layer?.cornerRadius = FloatChatPanel.surfaceCornerRadius
+        root.layer?.masksToBounds = true
         let backdrop: NSView
         if #available(macOS 26, *) {
             let glass = NSGlassEffectView()
-            glass.cornerRadius = 16
+            glass.cornerRadius = FloatChatPanel.surfaceCornerRadius
             backdrop = glass
         } else {
             let material = NSVisualEffectView()
             material.material = .hudWindow
             material.blendingMode = .behindWindow
             material.state = .active
-            material.wantsLayer = true
-            material.layer?.cornerRadius = 16
-            material.layer?.masksToBounds = true
             backdrop = material
         }
         glassBackdrop = backdrop
-        backdrop.isHidden = !glassEnabled
+        applySurfaceAppearance()
         for layer in [backdrop, stack] {
             layer.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(layer)
@@ -1313,11 +1448,6 @@ final class FloatChatController: NSObject {
         panel.setFrame(NSRect(x: visible.midX - size.width / 2,
                               y: visible.minY + (visible.height - size.height) * 0.6,
                               width: size.width, height: size.height), display: true)
-    }
-
-    private func applyPageAppearance(_ view: WKWebView) {
-        // Composite the whole page so an opaque site background still shows the glass beneath.
-        view.alphaValue = glassEnabled ? 0.84 : 1
     }
 
     private func makeWebView() -> WKWebView {
@@ -1495,6 +1625,7 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         stopTrackingPageLoad()
         updateStatus()
         updateWebsiteIdentity()
+        matchPageEdge(webView)
         if panel?.isKeyWindow == true { focusSelectedPage() }
         rememberPinnedPage()
         refreshPicker()
@@ -1605,6 +1736,10 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
 
 final class FloatChatPanel: NSPanel {
     static let autosaveName = "MiniChat.Panel" // pre-rename name; keeps the saved frame
+    static var surfaceCornerRadius: CGFloat {
+        if #available(macOS 26, *) { return 20 }
+        return 12
+    }
     /// Default content size (also the "reset size" target): a 3:4 portrait panel. Anything under
     /// 640 wide gets chatgpt.com's compact (mobile) layout; 420 sits between Classic's 440-wide
     /// companion chat and `minSize` (400), so the thread reads as a narrow column without the
@@ -1948,6 +2083,7 @@ extension FloatChatController {
         panel.contentView = stack
         controller.panel = panel
         controller.contentStack = stack
+        stack.wantsLayer = true
         defer {
             controller.tearDown()
             defaults.removePersistentDomain(forName: suite)
@@ -1995,11 +2131,13 @@ extension FloatChatController {
         let original = WKWebView(frame: .zero, configuration: config)
         let alternate = WKWebView(frame: .zero, configuration: config)
         defaults.set(true, forKey: "glassEnabled")
-        controller.applyPageAppearance(original)
-        guard original.alphaValue < 1 else { return false }
-        defaults.set(false, forKey: "glassEnabled")
-        controller.applyPageAppearance(original)
-        guard original.alphaValue == 1 else { return false }
+        controller.applySurfaceAppearance()
+        guard let legacyAlpha = stack.layer?.backgroundColor?.alpha,
+              abs(legacyAlpha - 0.84) < 0.001, stack.alphaValue == 1, original.alphaValue == 1 else { return false }
+        controller.setPanelTranslucency(32)
+        guard let sliderAlpha = stack.layer?.backgroundColor?.alpha, abs(sliderAlpha - 0.68) < 0.001 else { return false }
+        controller.setPanelTranslucency(0)
+        guard stack.layer?.backgroundColor?.alpha == 1, stack.alphaValue == 1 else { return false }
         let first = controller.selectedIndex
         let firstKey = controller.providers[first].key
         let secondKey = controller.providers[1].key

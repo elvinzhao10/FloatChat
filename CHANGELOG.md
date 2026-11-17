@@ -2,6 +2,14 @@
 
 ## 0.3.2
 
+### Build 7
+
+- One continuous rounded panel surface. The translucency slider changes the background while preserving text and control opacity.
+- Custom websites can use a local image as their icon, with an option to restore the website’s favicon.
+- Refreshed screenshots and a short explanation of local WebKit sign-ins in both READMEs.
+
+### Build 6
+
 - Doubao (豆包) joins the built-in chat platforms.
 - Page zoom has keyboard shortcuts and a per-chat slider in Settings. Each pinned conversation can have its own zoom.
 - Settings can stay open alongside the chat panel.

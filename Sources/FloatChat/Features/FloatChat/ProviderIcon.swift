@@ -5,11 +5,36 @@ import CryptoKit
 @MainActor
 enum ProviderIcon {
     private static var images: [String: NSImage] = [:]
-    private static func cacheFile(for url: URL) -> URL {
+    private static func iconFilename(for url: URL) -> String {
         let key = WebsiteFavicon.pageURL(for: url)?.absoluteString ?? url.absoluteString
         let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-        return URL.cachesDirectory.appendingPathComponent("dev.quickchat.omni/Favicons", isDirectory: true)
-            .appendingPathComponent(digest + ".png")
+        return digest + ".png"
+    }
+
+    private static func cacheFile(for url: URL) -> URL {
+        URL.cachesDirectory.appendingPathComponent("dev.quickchat.omni/Favicons", isDirectory: true)
+            .appendingPathComponent(iconFilename(for: url))
+    }
+
+    private static func customFile(for url: URL) -> URL {
+        URL.applicationSupportDirectory.appendingPathComponent("dev.quickchat.omni/CustomIcons", isDirectory: true)
+            .appendingPathComponent(iconFilename(for: url))
+    }
+
+    static func setCustomIcon(_ png: Data?, for url: URL) throws {
+        let file = customFile(for: url)
+        if let png {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: file, options: .atomic)
+        } else if FileManager.default.fileExists(atPath: file.path) {
+            try FileManager.default.removeItem(at: file)
+        }
+        images.removeAll()
+    }
+
+    static func copyCustomIcon(from oldURL: URL, to newURL: URL) {
+        guard let data = try? Data(contentsOf: customFile(for: oldURL)) else { return }
+        try? setCustomIcon(data, for: newURL)
     }
 
     static func store(_ png: Data, for url: URL) {
@@ -32,18 +57,20 @@ enum ProviderIcon {
             ("copilot.microsoft.com", "copilot"), ("grok.com", "grok"), ("doubao.com", "doubao")
         ]
         let key = official.first { host == $0.0 || host.hasSuffix("." + $0.0) }?.1
-        let file = key == nil ? cacheFile(for: url) : nil
-        let cacheKey = "\(file?.lastPathComponent ?? host):\(size)"
+        let file = cacheFile(for: url)
+        let cacheKey = "\(file.lastPathComponent):\(size)"
         if let image = images[cacheKey] { return image }
-        var image: NSImage?
-        if let key {
+        var image = NSImage(contentsOf: customFile(for: url))
+        let isCustom = image != nil
+        if image == nil, let key {
             let resource = Bundle.main.resourceURL?.appendingPathComponent("Providers/\(key).png")
             let development = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/Providers/\(key).png")
             image = resource.flatMap { NSImage(contentsOf: $0) } ?? NSImage(contentsOf: development)
         }
-        if let file { image = NSImage(contentsOf: file) }
+        if image == nil { image = NSImage(contentsOf: file) }
+        let template = key == "chatgpt" && !isCustom
         let result: NSImage
-        if let image, key != "chatgpt" {
+        if let image, !template {
             let bounds = NSRect(x: 0, y: 0, width: size, height: size)
             result = NSImage(size: bounds.size, flipped: false) { _ in
                 NSBezierPath(roundedRect: bounds, xRadius: size * 0.22, yRadius: size * 0.22).addClip()
@@ -56,7 +83,7 @@ enum ProviderIcon {
         } else {
             result = image ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "Website")!
         }
-        if key == "chatgpt" { result.isTemplate = true }
+        if template { result.isTemplate = true }
         result.size = NSSize(width: size, height: size)
         images[cacheKey] = result
         return result

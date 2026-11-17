@@ -9,6 +9,7 @@ final class ChatSettingsFields: ObservableObject {
     @Published var draggedGroup: Bool?
     @Published var zoomRow: String?
     @Published var zoomDraft = 1.0
+    @Published var panelTranslucency = 0.0
 }
 
 struct ChatSettingsView: View {
@@ -38,11 +39,13 @@ struct ChatSettingsView: View {
     let loginStatus: SMAppService.Status
     let setLaunchAtLogin: (Bool) -> Void
     let editEntry: (Int) -> Void
+    let chooseIcon: (URL) -> Void
+    let resetIcon: (URL) -> Void
     let refreshIcon: (URL) -> Void
     let clearWebsiteData: () -> Void
     let clearingWebsiteData: Bool
     let reloadPages: () -> Void
-    let glassEnabled: Bool
+    let setPanelTranslucency: (Double) -> Void
     let centerOnOpen: Bool
     let hideOnClickAway: Bool
     let zoomKeysEnabled: Bool
@@ -93,8 +96,23 @@ struct ChatSettingsView: View {
     }
     private func chatRow(_ provider: Row) -> some View {
         HStack(spacing: 12) {
-            Image(nsImage: ProviderIcon.image(for: provider.url, size: 22))
+            let icon = Image(nsImage: ProviderIcon.image(for: provider.url, size: 22))
                 .resizable().scaledToFit().frame(width: 22, height: 22)
+            if provider.custom {
+                Menu {
+                    Button(AppText.t("Choose Icon…")) { chooseIcon(provider.url) }
+                    Button(AppText.t("Use Website Icon")) { resetIcon(provider.url) }
+                    Button(AppText.t("Refresh Icon")) { refreshIcon(provider.url) }
+                        .disabled(provider.refreshingIcon)
+                } label: { icon }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(AppText.t("Website Icon"))
+                .accessibilityLabel(AppText.t("Website Icon"))
+            } else {
+                icon
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(provider.name).fontWeight(.medium).lineLimit(1)
                 Text(provider.url.host ?? "").font(.caption).foregroundStyle(.secondary)
@@ -106,14 +124,6 @@ struct ChatSettingsView: View {
                     .buttonStyle(.plain)
                     .help(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
                     .accessibilityLabel(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
-            }
-            if provider.custom {
-                Button { refreshIcon(provider.url) } label: {
-                    Image(systemName: "arrow.clockwise")
-                }.buttonStyle(.plain)
-                    .disabled(provider.refreshingIcon)
-                    .help(AppText.t(provider.refreshingIcon ? "Refreshing Icon…" : "Refresh Icon"))
-                    .accessibilityLabel(AppText.t("Refresh Icon") + " " + provider.name)
             }
             Toggle(provider.name, isOn: Binding(get: { provider.enabled }, set: { _ in toggle(provider.index) }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
@@ -212,7 +222,18 @@ struct ChatSettingsView: View {
                 Button(AppText.t("Approve in Login Items…")) { SMAppService.openSystemSettingsLoginItems() }
             }
             Section(AppText.t("Floating Window")) {
-                Toggle(AppText.t("Translucent background"), isOn: panelSetting(glassEnabled, "glassEnabled"))
+                LabeledContent(AppText.t("Translucency")) {
+                    HStack(spacing: 8) {
+                        Slider(value: Binding(get: { fields.panelTranslucency }, set: { setPanelTranslucency($0) }), in: 0...40) {
+                            Text(AppText.t("Translucency"))
+                        }
+                        .labelsHidden()
+                        .frame(width: 140)
+                        Text((fields.panelTranslucency / 100).formatted(.percent.precision(.fractionLength(0))))
+                            .monospacedDigit()
+                            .frame(minWidth: 34, alignment: .trailing)
+                    }
+                }
                 Picker(AppText.t("Open window at"), selection: panelSetting(centerOnOpen, "centerOnOpen")) {
                     Text(AppText.t("Last position")).tag(false)
                     Text(AppText.t("Default position")).tag(true)
