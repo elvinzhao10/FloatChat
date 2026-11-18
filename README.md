@@ -8,7 +8,7 @@
   <p>Sign in directly on each website. WebKit keeps FloatChat’s sessions locally, separately from your default browser. FloatChat needs no account or API key of its own. Keep it alongside your other Mac apps, or open the current page in your default browser anytime.</p>
   <p><img src="docs/images/panel.png" width="350" alt="FloatChat’s rounded panel with all nine provider icons and the ChatGPT composer"></p>
   <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"> <img src="Resources/Providers/doubao.png" width="24" height="24" alt="Doubao"></p>
-  <p>Nine built-in providers, including Doubao (豆包), plus any HTTPS chat website you add.</p>
+  <p>Nine built-in providers, plus any HTTPS chat website you add.</p>
 </div>
 
 ## Get started
