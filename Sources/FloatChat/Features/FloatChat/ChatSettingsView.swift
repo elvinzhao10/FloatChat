@@ -19,7 +19,6 @@ struct ChatSettingsView: View {
         let name: String
         let url: URL
         let pinned: Bool
-        let custom: Bool
         let refreshingIcon: Bool
         let enabled: Bool
     }
@@ -49,6 +48,7 @@ struct ChatSettingsView: View {
     let centerOnOpen: Bool
     let hideOnClickAway: Bool
     let zoomKeysEnabled: Bool
+    let showGenerationIndicator: Bool
     let setPanelPreference: (Bool, String) -> Void
     let zoomFor: (String) -> Double
     let setZoom: (String, Double) -> Void
@@ -100,7 +100,7 @@ struct ChatSettingsView: View {
         HStack(spacing: 12) {
             let icon = Image(nsImage: ProviderIcon.image(for: provider.url, size: 22))
                 .resizable().scaledToFit().frame(width: 22, height: 22)
-            if provider.custom {
+            if !provider.pinned {
                 Menu {
                     Button(AppText.t("Choose Icon…")) { chooseIcon(provider.url) }
                     Button(AppText.t("Use Website Icon")) { resetIcon(provider.url) }
@@ -121,12 +121,10 @@ struct ChatSettingsView: View {
             }
             Spacer(minLength: 8)
             zoomControl(provider)
-            if provider.custom || provider.pinned {
-                Button { editEntry(provider.index) } label: { Image(systemName: "pencil") }
-                    .buttonStyle(.plain)
-                    .help(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
-                    .accessibilityLabel(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
-            }
+            Button { editEntry(provider.index) } label: { Image(systemName: "pencil") }
+                .buttonStyle(.plain)
+                .help(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
+                .accessibilityLabel(AppText.t(provider.pinned ? "Rename Pinned Chat" : "Edit Website"))
             Toggle(provider.name, isOn: Binding(get: { provider.enabled }, set: { _ in toggle(provider.index) }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 .help(AppText.t("Show in the chat strip"))
@@ -224,6 +222,25 @@ struct ChatSettingsView: View {
         }
     }
 
+    private func settingLabel(_ title: String, help: String) -> some View {
+        HStack(spacing: 5) {
+            Text(AppText.t(title))
+            settingHelp(help)
+        }
+    }
+
+    private func settingHelp(_ help: String) -> some View {
+        SettingsHelpButton(explanation: AppText.t(help)).frame(width: 18, height: 18)
+    }
+
+    private func toggleWithHelp(_ title: String, isOn: Binding<Bool>, help: String) -> some View {
+        LabeledContent {
+            Toggle(AppText.t(title), isOn: isOn).labelsHidden()
+        } label: {
+            settingLabel(title, help: help)
+        }
+    }
+
     private var general: some View {
         Form {
             Toggle(AppText.t("Launch at Login"), isOn: Binding(
@@ -233,7 +250,7 @@ struct ChatSettingsView: View {
                 Button(AppText.t("Approve in Login Items…")) { SMAppService.openSystemSettingsLoginItems() }
             }
             Section(AppText.t("Floating Window")) {
-                LabeledContent(AppText.t("Translucency")) {
+                LabeledContent {
                     HStack(spacing: 8) {
                         Slider(value: Binding(get: { fields.panelTranslucency }, set: { setPanelTranslucency($0) }), in: 0...40) {
                             Text(AppText.t("Translucency"))
@@ -244,28 +261,35 @@ struct ChatSettingsView: View {
                             .monospacedDigit()
                             .frame(minWidth: 34, alignment: .trailing)
                     }
+                } label: {
+                    settingLabel("Translucency", help: "Let the desktop show through website backgrounds while keeping text and controls opaque.")
                 }
                 Picker(AppText.t("Open window at"), selection: panelSetting(centerOnOpen, "centerOnOpen")) {
                     Text(AppText.t("Last position")).tag(false)
                     Text(AppText.t("Default position")).tag(true)
                 }
-                Toggle(AppText.t("Hide when clicking outside"), isOn: panelSetting(hideOnClickAway, "hideOnClickAway"))
+                toggleWithHelp("Hide when clicking outside", isOn: panelSetting(hideOnClickAway, "hideOnClickAway"),
+                               help: "Hide the chat window when you click elsewhere. Settings can stay open alongside it.")
+                toggleWithHelp("Show reply indicator", isOn: panelSetting(showGenerationIndicator, "showGenerationIndicator"),
+                               help: "Background replies have a small ring on their tab. A movable dot appears when the window is hidden.")
             }
             Section(AppText.t("Web Pages")) {
-                Picker(AppText.t("Language"), selection: Binding(get: { language }, set: { setLanguage($0) })) {
-                    Text("English").tag("en")
-                    Text("简体中文").tag("zh-Hans")
-                    Text(AppText.t("System Default")).tag("system")
+                LabeledContent {
+                    Picker(AppText.t("Language"), selection: Binding(get: { language }, set: { setLanguage($0) })) {
+                        Text("English").tag("en")
+                        Text("简体中文").tag("zh-Hans")
+                        Text(AppText.t("System Default")).tag("system")
+                    }.labelsHidden()
+                } label: {
+                    settingLabel("Language", help: "New pages use this language. A website's own saved language can take priority.")
                 }
-                Text(AppText.t("New pages use this language. A website's own saved language can take priority."))
-                    .font(.caption).foregroundStyle(.secondary)
                 Button(AppText.t("Reload open chats…"), action: reloadPages)
             }
-            Section(AppText.t("Keep inactive chats")) {
+            Section {
                 retentionPicker("Instant Chats", value: instantRetention, pinned: false)
                 retentionPicker("Pinned Conversations", value: pinnedRetention, pinned: true)
-                Text(AppText.t("After the time expires, instant chats start fresh and pins reopen their saved conversation. Sign-ins are kept."))
-                    .font(.caption).foregroundStyle(.secondary)
+            } header: {
+                settingLabel("Keep inactive chats", help: "After the time expires, instant chats start fresh and pins reopen their saved conversation. Sign-ins are kept.")
             }
             Section(AppText.t("Shortcuts")) {
                 Toggle(AppText.t("Website zoom shortcuts") + " (⌘+, ⌘−)", isOn: panelSetting(zoomKeysEnabled, "zoomKeysEnabled"))

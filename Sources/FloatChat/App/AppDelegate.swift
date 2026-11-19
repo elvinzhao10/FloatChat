@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
         menuController = controller
 
+        AppUpdates.start()
         manager.start()
         (manager.features.first as? FloatChatFeature)?.show()
     }

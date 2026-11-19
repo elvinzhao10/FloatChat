@@ -17,9 +17,9 @@ build: app
 
 check:
 	@set -e; for script in scripts/*.sh; do bash -n "$$script"; done
-	swift build $(SWIFT_BUILD_FLAGS)
+	swift test $(SWIFT_BUILD_FLAGS)
 	@set -e; bin="$$(swift build $(SWIFT_BUILD_FLAGS) --show-bin-path)/FloatChat"; \
-	for mode in pages language shortcuts keymap panel; do FLOATCHAT_SELFTEST="$$mode" "$$bin"; done
+	for mode in pages language shortcuts panel; do FLOATCHAT_SELFTEST="$$mode" "$$bin"; done
 
 run: app
 	@$(QUIT)

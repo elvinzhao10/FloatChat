@@ -1,25 +1,34 @@
-#if DEBUG
 import Foundation
+import XCTest
+@testable import FloatChat
 
-/// Headless self-test of the keymap overrides. Run a debug build with:
-///   FLOATCHAT_SELFTEST=keymap .build/debug/FloatChat
-/// Works only on temp directories (CODEX_HOME is pointed at a temp dir); never touches ~/.codex.
+final class KeymapTests: XCTestCase, @unchecked Sendable {
+    func testKeymapOverrides() async {
+        await KeymapCases.run()
+    }
+}
+
+/// All cases use an isolated temporary CODEX_HOME.
 @MainActor
-enum KeymapSelfTest {
-    private static var failures = 0
-
-    private static func check(_ cond: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
-        if cond { print("  ok   \(name)") } else { failures += 1; print("  FAIL \(name) \(detail())") }
+private enum KeymapCases {
+    private static func check(_ condition: Bool, _ name: String, _ detail: @autoclosure () -> String = "",
+                              file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(condition, name + " " + detail(), file: file, line: line)
     }
 
-    static func run() -> Bool {
+    static func run() {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("keymap-selftest-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         // Safety net: even a default-resolved keymap path must land in the temp dir.
         let safeCodexHome = root.appendingPathComponent("codex-home", isDirectory: true).path
+        let originalCodexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
         setenv("CODEX_HOME", safeCodexHome, 1)
+        defer {
+            if let originalCodexHome { setenv("CODEX_HOME", originalCodexHome, 1) }
+            else { unsetenv("CODEX_HOME") }
+        }
         var n = 0
         func fresh(_ target: KeymapOverride.Target = ShowMiniController.target) -> (KeymapOverride, URL) {
             n += 1
@@ -35,7 +44,6 @@ enum KeymapSelfTest {
         }
         let markerFile = "[\n  {\n    \"command\": \"openAvatarOverlay\",\n    \"key\": null\n  }\n]\n"
 
-        print("1. no file (and no ~/.codex dir)")
         do {
             let (km, home) = fresh()
             try km.apply()
@@ -48,7 +56,6 @@ enum KeymapSelfTest {
             check(try km.restore() == .nothingToRestore, "restore idempotent")
         } catch { check(false, "case 1 threw", "\(error)") }
 
-        print("2. file with other entries + unknown fields")
         do {
             let (km, _) = fresh()
             let original = """
@@ -70,7 +77,6 @@ enum KeymapSelfTest {
             check(restored == (try OrderedJSON.parse(original)), "restore == original (semantically)")
         } catch { check(false, "case 2 threw", "\(error)") }
 
-        print("3. existing openAvatarOverlay binding (Ctrl+Alt+M) + legacy alias")
         do {
             let (km, _) = fresh()
             let original = """
@@ -98,7 +104,6 @@ enum KeymapSelfTest {
             check(!km.hasBackup, "backup dropped")
         } catch { check(false, "case 3 threw", "\(error)") }
 
-        print("4. malformed / wrong-schema / blank files")
         do {
             let (km, _) = fresh()
             for bad in ["[{\"command\":\"newTask\",\"key\":\"Cmd+N\"},]", "{\"command\":\"x\"}",
@@ -115,7 +120,6 @@ enum KeymapSelfTest {
             check(text(km.keymapURL) == "  \n", "blank file restored byte-for-byte")
         } catch { check(false, "case 4 threw", "\(error)") }
 
-        print("5. crash recovery through KeymapOverrideGroup (CODEX_HOME env)")
         do {
             let (km, home) = fresh()
             setenv("CODEX_HOME", home.path, 1)
@@ -143,7 +147,6 @@ enum KeymapSelfTest {
             try km.restore()
         } catch { check(false, "case 5 threw", "\(error)") }
 
-        print("6. restart-pending logic")
         do {
             var (km, _) = fresh()
             var clock = Date(timeIntervalSince1970: 1_000)
@@ -161,7 +164,6 @@ enum KeymapSelfTest {
         } catch { check(false, "case 6 threw", "\(error)") }
 
 
-        print("7. a keyed override sharing the file with the Mini unbind")
         do {
             let (mini, _) = fresh()
             let popout = KeymapOverride(target: .init(commandID: "hotkeyWindow", key: "Control+Alt+Shift+F19", displayName: "Popout Window", stateName: "PopoutWindow"), keymapURL: mini.keymapURL,
@@ -185,7 +187,6 @@ enum KeymapSelfTest {
         } catch { check(false, "case 7 threw", "\(error)") }
 
 
-        print("8. Show Mini controller: reasons + FloatChat shortcut conflicts")
         do {
             let (km, _) = fresh()
             let mini = ShowMiniController(keymap: km)
@@ -211,7 +212,6 @@ enum KeymapSelfTest {
             check(!mini.conflicts(with: .optionSpace) && mini.userShortcutDescription == nil, "user unbound Mini → no conflict")
         } catch { check(false, "case 8 threw", "\(error)") }
 
-        print("9. Show Mini bound only through the legacy alias")
         do {
             let (km, _) = fresh()
             let mini = ShowMiniController(keymap: km)
@@ -225,7 +225,6 @@ enum KeymapSelfTest {
             try mini.set(.userDisabled, active: false)
         } catch { check(false, "case 9 threw", "\(error)") }
 
-        print("10. group rolls back when a later override fails with a non-keymap error")
         do {
             let (first, _) = fresh(.init(commandID: "hotkeyWindow", key: "Control+Alt+Shift+F19",
                                          displayName: "Popout Window", stateName: "PopoutWindow"))
@@ -243,8 +242,5 @@ enum KeymapSelfTest {
                   "first override rolled back", text(first.keymapURL) ?? "nil")
         } catch { check(false, "case 10 threw", "\(error)") }
 
-        print(failures == 0 ? "keymap self-test: ALL PASSED" : "keymap self-test: \(failures) FAILED")
-        return failures == 0
     }
 }
-#endif

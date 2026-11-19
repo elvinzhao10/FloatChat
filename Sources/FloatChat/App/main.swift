@@ -14,9 +14,6 @@ MainActor.assumeIsolated {
     if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "pages" {
         exit(FloatChatController.runCacheSelfTest() ? 0 : 1)
     }
-    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "keymap" {
-        exit(KeymapSelfTest.run() ? 0 : 1)
-    }
     // Opens FloatChat panel without enabling any feature (no keymap changes).
     if ProcessInfo.processInfo.environment["FLOATCHAT_DEBUG"] == "panel" {
         _ = NSApplication.shared

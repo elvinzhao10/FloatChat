@@ -9,5 +9,6 @@ let package = Package(
             name: "FloatChat",
             path: "Sources/FloatChat"
         ),
+        .testTarget(name: "FloatChatTests", dependencies: ["FloatChat"]),
     ]
 )

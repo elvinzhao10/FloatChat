@@ -7,7 +7,7 @@
   <p>FloatChat packs the chat websites you already use into a small, native macOS window. It uses Swift, AppKit, and the WebKit browser engine built into macOS. Pages are released when they’re idle, and there’s no separate browser runtime to ship.</p>
   <p>Sign in directly on each website. WebKit keeps FloatChat’s sessions locally, separately from your default browser. FloatChat needs no account or API key of its own. Keep it alongside your other Mac apps, or open the current page in your default browser anytime.</p>
   <p><img src="docs/images/panel.png" width="350" alt="FloatChat’s rounded panel with all nine provider icons and the ChatGPT composer"></p>
-  <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"> <img src="Resources/Providers/doubao.png" width="24" height="24" alt="Doubao"></p>
+  <p><img src="Resources/Providers/chatgpt.png" width="24" height="24" alt="ChatGPT"> <img src="Resources/Providers/claude.png" width="24" height="24" alt="Claude"> <img src="Resources/Providers/deepseek.png" width="24" height="24" alt="DeepSeek"> <img src="Resources/Providers/kimi.png" width="24" height="24" alt="Kimi"> <img src="Resources/Providers/gemini.png" width="24" height="24" alt="Gemini"> <img src="Resources/Providers/perplexity.png" width="24" height="24" alt="Perplexity"> <img src="Resources/Providers/copilot.png" width="24" height="24" alt="Copilot"> <img src="Resources/Providers/grok.png" width="24" height="24" alt="Grok"> <img src="Resources/Providers/doubao.png" width="24" height="24" alt=""></p>
   <p>Nine built-in providers, plus any HTTPS chat website you add.</p>
 </div>
 
@@ -20,7 +20,7 @@
 <details>
 <summary>If macOS blocks the first launch</summary>
 
-The community build uses ad-hoc signing and is distributed without Apple notarization. After trying to open it, verify the download came from the official release page, then choose **System Settings → Privacy & Security → Open Anyway**. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
+For ad-hoc-signed builds such as 0.3.4, macOS may require a first-launch approval. After trying to open it, verify the download came from the official release page, then choose **System Settings → Privacy & Security → Open Anyway**. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
 
 </details>
 
@@ -43,13 +43,15 @@ The community build uses ad-hoc signing and is distributed without Apple notariz
 
 <p align="center"><img src="docs/images/websites.png" width="460" alt="Chats settings with website name, address and add button at the bottom"></p>
 
-Settings can stay open beside the floating window. In **Chats**, drag to reorder, hide sites with their switches, click the pencil to change a custom site’s name or address, or rename a pin. Click a custom site’s icon to choose a local image, restore the site’s icon, or refresh it. Right-click a tab to check its hostname or change its zoom. In **General → Floating Window**, choose the last or default position, hide the window on outside clicks, or adjust **Translucency** with a slider. Text and controls stay opaque. macOS 26 and later use Liquid Glass.
+Settings can stay open beside the floating window. In **Chats**, drag to reorder, hide sites with their switches, click the pencil to change a built-in or custom site’s name or address, or rename a pin. Click a website’s icon to choose a local image, restore the site’s icon, or refresh it. Right-click a tab to check its hostname or change its zoom. In **General → Floating Window**, choose the last or default position, hide the window on outside clicks, or adjust **Translucency** with a slider. Text and controls stay opaque. macOS 26 and later use Liquid Glass.
 
 <p align="center"><img src="docs/images/general.png" width="460" alt="General settings with the Translucency slider and separate retention timers for instant and pinned chats"></p>
 
 ## Page retention and sign-ins
 
-FloatChat keeps live pages while they are inactive. Under **Settings → General → Keep inactive chats**, choose a duration for instant chats and another for pins. The timer starts when you leave a chat or hide the window. After expiry, an instant chat reopens at its starting page and a pin reopens its saved conversation. Sign-ins are kept. Unsaved drafts can be lost when WebKit releases a page.
+FloatChat keeps live pages while they are inactive. Under **Settings → General → Keep inactive chats**, choose a duration for instant chats and another for pins. The timer starts when you leave a chat or hide the window. After expiry, an instant chat reopens at its starting page and a pin reopens its saved conversation. Sign-ins are kept. FloatChat can recover unsent plain text in a pinned ChatGPT or Claude conversation during the current app run. Attachments and formatting can be lost when a page is released.
+
+Turn on **Settings → General → Show reply indicator** to see a small ring on tabs generating a reply in the background. When the window is hidden, a movable dot reopens the most recent generating chat. Detection depends on the website’s stop button. Hover over **?** in Settings for more detail.
 
 FloatChat and your default browser maintain separate sign-in sessions. Hiding or removing a website keeps its local login. Custom icons are fetched directly from the website over HTTPS in a separate session without chat cookies.
 
@@ -69,7 +71,7 @@ For manual cleanup, quit FloatChat. In Finder, press **⇧⌘G** and check `~/Li
 <details>
 <summary>Build from source</summary>
 
-With Apple’s command-line tools installed, run `make app`. The bundle is built at `build/FloatChat.app`.
+With Apple’s command-line tools installed, run `make app`. The bundle is built at `build/FloatChat.app`. See the [build and release guide](docs/releases.md) for tests, automatic updates, and distribution.
 
 </details>
 

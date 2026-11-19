@@ -1,5 +1,11 @@
 # FloatChat release checks
 
+## 0.3.4
+
+- The four local AppKit and WebKit regression suites passed. Fixtures cover saved pin titles and drafts, concurrent and delayed reply detection, and translucency during reloads and conversation layout changes.
+- The independently built local releases signed with the same identity kept the tested ChatGPT and Claude sign-ins and all 14 saved settings. The update from build 18 to 19 did not show a Keychain prompt.
+- Public 0.3.4 uses a universal build with ad-hoc signing. The reusable local identity is specific to the test Mac. Developer ID notarization and in-app updates are described in the release guide.
+
 ## 0.3.3
 
 - All five local regression suites passed on macOS. The universal 0.3.3 DMG and ZIP were built from the same app bundle with arm64 and x86_64 slices.

@@ -12,6 +12,13 @@ final class ChatTabButton: NSButton, NSDraggingSource {
     override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() }
     var tabKey = ""
     var pinned = false
+    var generating = false {
+        didSet {
+            guard generating != oldValue else { return }
+            setAccessibilityValue(generating ? AppText.t("Generating reply") : nil)
+            needsDisplay = true
+        }
+    }
     var onReorder: ((String, String) -> Void)?
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -49,6 +56,12 @@ final class ChatTabButton: NSButton, NSDraggingSource {
         if state == .on {
             NSColor.controlAccentColor.setFill()
             NSBezierPath(roundedRect: NSRect(x: 9, y: 1, width: bounds.width - 18, height: 2), xRadius: 1, yRadius: 1).fill()
+        }
+        if generating {
+            NSColor.labelColor.withAlphaComponent(0.72).setStroke()
+            let ring = NSBezierPath(ovalIn: NSRect(x: 3.5, y: bounds.maxY - 7.5, width: 4, height: 4))
+            ring.lineWidth = 1
+            ring.stroke()
         }
         if pinned {
             NSColor.secondaryLabelColor.setFill()

@@ -1,5 +1,13 @@
 # FloatChat version history
 
+## 0.3.4
+
+- Keep page translucency through refreshes and conversation changes, including more ChatGPT and Claude composer layouts. Text and controls stay opaque.
+- Pinned chats keep their last known title on hover. FloatChat can also recover plain-text drafts for pinned ChatGPT and Claude chats released during the current app run.
+- Show an optional reply indicator for background chats. A small ring marks generating tabs, and a draggable monochrome dot reopens the most recent generating chat when the window is hidden.
+- Edit built-in and custom websites, including their names, addresses, and icons. Settings adds compact hover help.
+- Add a reusable local signing identity, XCTest coverage, a macOS build workflow, and tooling for signed distribution.
+
 ## 0.3.3
 
 - Keep all eligible instant chats loaded for their inactivity period. Pins have a separate timer and reopen their saved conversation after expiry.
