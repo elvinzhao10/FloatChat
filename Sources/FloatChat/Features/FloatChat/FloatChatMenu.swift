@@ -32,7 +32,31 @@ extension FloatChatController {
             AppUpdates.check()
         }
         updates.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
-        return [open, switchChat, .separator(), settings, updates]
+        let record = ActionMenuItem(meetingRecorder.actionTitle) { [weak self] in self?.toggleRecording() }
+        record.image = NSImage(systemSymbolName: meetingRecorder.isRecording ? "stop.circle" : "record.circle", accessibilityDescription: nil)
+        var recordingItems: [NSMenuItem] = [record]
+        if websiteAudioRelay.isCapturing(webView) {
+            recordingItems.append(ActionMenuItem(AppText.t("Stop Sharing Mac Audio")) { [weak self] in
+                self?.websiteAudioRelay.stop()
+            })
+        }
+        if meetingRecorder.recordsSystemAudio {
+            let status = NSMenuItem(title: AppText.t(meetingRecorder.systemAudioStatus), action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            recordingItems.append(status)
+        }
+        if meetingRecorder.usesBuiltInMicrophone {
+            let input = NSMenuItem(title: AppText.t("Using the Mac’s microphone for headphone playback"),
+                                   action: nil, keyEquivalent: "")
+            input.isEnabled = false
+            recordingItems.append(input)
+        }
+        if lastRecordingFile != nil {
+            let save = ActionMenuItem(AppText.t("Save Last Recording…")) { [weak self] in self?.saveLastRecording() }
+            save.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
+            recordingItems.append(save)
+        }
+        return [open, switchChat, .separator()] + recordingItems + [.separator(), settings, updates]
     }
     func reorderProviders(_ offsets: IndexSet, to destination: Int) {
         let selected = providers[selectedIndex].key

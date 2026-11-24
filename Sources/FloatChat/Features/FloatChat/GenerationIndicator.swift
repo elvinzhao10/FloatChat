@@ -189,85 +189,13 @@ final class GenerationIndicator {
         panel.backgroundColor = .clear
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        let button = GenerationBall(frame: NSRect(x: 0, y: 0, width: size, height: size))
-        button.reopen = reopen
+        let button = ActivityBall(frame: NSRect(x: 0, y: 0, width: size, height: size))
+        button.onPress = reopen
         button.moved = { [weak self] in self?.position = $0 }
         panel.contentView = button
         window = panel
         if !reduceMotion { fade(panel, to: 0, duration: 0) }
         panel.orderFrontRegardless()
         if !reduceMotion { fade(panel, to: 1, duration: 0.11) }
-    }
-}
-
-@MainActor
-private final class GenerationBall: NSView {
-    var reopen: (() -> Void)?
-    var moved: ((NSPoint) -> Void)?
-    private var start: NSPoint?
-    private var origin: NSPoint?
-    private var dragging = false
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        let puck = CALayer()
-        puck.frame = bounds.insetBy(dx: 6, dy: 6)
-        puck.cornerRadius = puck.bounds.width / 2
-        puck.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        puck.borderColor = NSColor.white.withAlphaComponent(0.85).cgColor
-        puck.borderWidth = 1
-        layer?.addSublayer(puck)
-        let center = CALayer()
-        center.frame = puck.bounds.insetBy(dx: 7, dy: 7)
-        center.cornerRadius = center.bounds.width / 2
-        center.backgroundColor = NSColor.white.withAlphaComponent(0.78).cgColor
-        puck.addSublayer(center)
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            let pulse = CABasicAnimation(keyPath: "transform.scale")
-            pulse.fromValue = 0.86
-            pulse.toValue = 1.07
-            pulse.duration = 0.9
-            pulse.autoreverses = true
-            pulse.repeatCount = .infinity
-            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            puck.add(pulse, forKey: "pulse")
-        }
-        toolTip = AppText.t("Chat is generating. Click to reopen or drag to move.")
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(toolTip)
-    }
-
-    required init?(coder: NSCoder) { nil }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func accessibilityPerformPress() -> Bool {
-        reopen?()
-        return true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        start = NSEvent.mouseLocation
-        origin = window?.frame.origin
-        dragging = false
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let start, let origin, let window else { return }
-        let pointer = NSEvent.mouseLocation
-        let dx = pointer.x - start.x
-        let dy = pointer.y - start.y
-        guard dragging || abs(dx) + abs(dy) >= 4 else { return }
-        dragging = true
-        guard let area = NSScreen.screens.first(where: { $0.frame.contains(pointer) })?.visibleFrame else { return }
-        window.setFrameOrigin(NSPoint(x: min(max(origin.x + dx, area.minX), area.maxX - bounds.width),
-                                      y: min(max(origin.y + dy, area.minY), area.maxY - bounds.height)))
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if dragging, let origin = window?.frame.origin { moved?(origin) }
-        else { reopen?() }
-        start = nil
-        origin = nil
     }
 }

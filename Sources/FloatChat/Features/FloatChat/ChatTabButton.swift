@@ -3,6 +3,8 @@ import QuartzCore
 
 /// Flat native control with a selection underline and local drag reordering.
 final class ChatTabButton: NSButton, NSDraggingSource {
+    private static let pinBadge = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(paletteColors: [.secondaryLabelColor]))
     private static let dragType = NSPasteboard.PasteboardType("dev.quickchat.omni.chat-tab")
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
@@ -64,8 +66,7 @@ final class ChatTabButton: NSButton, NSDraggingSource {
             ring.stroke()
         }
         if pinned {
-            NSColor.secondaryLabelColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: bounds.maxX - 6, y: bounds.maxY - 6, width: 3, height: 3)).fill()
+            Self.pinBadge?.draw(in: NSRect(x: bounds.maxX - 9, y: bounds.maxY - 9, width: 7, height: 7))
         }
     }
     override func mouseDown(with event: NSEvent) {

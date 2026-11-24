@@ -16,15 +16,17 @@ final class PinnedDrafts {
         pending.removeAll()
     }
 
-    private static let composer = #"""
-        const composer = () => {
+    static let composer = #"""
+        const composer = (allowHidden = false) => {
             const host = location.hostname.replace(/^www\./, '');
             const selector = host === 'chatgpt.com'
                 ? '#prompt-textarea:is([contenteditable="true"], textarea)'
                 : host === 'claude.ai' ? '.ProseMirror[contenteditable="true"]' : null;
             if (!selector) return null;
-            const fields = [...document.querySelectorAll(selector)].filter(field => field.getClientRects().length);
-            return fields.length === 1 ? fields[0] : null;
+            const fields = [...document.querySelectorAll(selector)];
+            const visible = fields.filter(field => field.getClientRects().length);
+            if (visible.length === 1) return visible[0];
+            return allowHidden && fields.length === 1 ? fields[0] : null;
         };
         const read = field => 'value' in field ? field.value : field.innerText;
         """#

@@ -11,6 +11,9 @@ MainActor.assumeIsolated {
     if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "panel" {
         exit(FloatChatController.runPanelSelfTest() ? 0 : 1)
     }
+    if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "audio" {
+        exit(FloatChatController.runAudioSelfTest() ? 0 : 1)
+    }
     if ProcessInfo.processInfo.environment["FLOATCHAT_SELFTEST"] == "pages" {
         exit(FloatChatController.runCacheSelfTest() ? 0 : 1)
     }

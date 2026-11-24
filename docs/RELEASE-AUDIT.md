@@ -1,5 +1,12 @@
 # FloatChat release checks
 
+## 0.4.0 (build 44)
+
+- The local provider, language, shortcut, audio, and panel suites passed on Apple silicon. A separate SpeechTranscriber probe recognized machine-generated speech before capture ended. The WebKit fixtures cover PCM delivery to the website, keeping dictation alive while the panel is hidden, and replacing the live preview with text returned by the website.
+- Six one-second samples of the idle native FloatChat process reported 0.0% CPU at the tool’s displayed precision and 36 MB of memory. Website content uses separate WebKit processes. This sample describes the app process and does not measure browser or active speech-model cost.
+- Website audio starts with consent for the active HTTPS page. The relay binds audio pulls to the same page and its session token. The floating captions reuse the approved PCM, use bounded buffers, and stop processing when the session ends. Apple manages the optional language model separately from the app bundle.
+- The app targets macOS 14 or later and has arm64 and x86_64 slices. Audio mixing requires macOS 14.2 or later. Live captions require macOS 26 or later and supported hardware and language. The published packages use ad-hoc signing. The 2.58 MB ZIP and 3.12 MB DMG passed packaging and checksum verification.
+
 ## 0.3.4
 
 - The four local AppKit and WebKit regression suites passed. Fixtures cover saved pin titles and drafts, concurrent and delayed reply detection, and translucency during reloads and conversation layout changes.

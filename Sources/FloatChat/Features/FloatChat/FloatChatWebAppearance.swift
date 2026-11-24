@@ -6,6 +6,7 @@ extension FloatChatController {
         pageURLObservation = view.observe(\.url, options: [.new]) { [weak self] view, _ in
             MainActor.assumeIsolated {
                 guard let self, self.webView === view else { return }
+                self.dictationPreview.checkAddress(in: view)
                 self.rememberPinnedPage()
                 self.updateWebsiteIdentity()
                 self.requestPageAppearance(for: view)
@@ -23,7 +24,7 @@ extension FloatChatController {
     /// Match the native controls to that canvas without changing the site's layout or DOM.
     private func syncPageChrome(_ webView: WKWebView) {
         if let color = webView.underPageBackgroundColor,
-           panelTranslucency == 0 || color.alphaComponent == 1 {
+           effectivePanelTranslucency == 0 || color.alphaComponent == 1 {
             setSurfaceColor(color)
         }
         requestPageAppearance(for: webView)
@@ -63,14 +64,20 @@ extension FloatChatController {
             const canvas = ':is(#floatchat-canvas, [data-floatchat-canvas])';
             const backdrop = ':is(#floatchat-canvas, [data-floatchat-composer-backdrop])';
             const drawer = ':is(#floatchat-canvas, [data-floatchat-drawer])';
+            const before = ':is(#floatchat-canvas, [data-floatchat-clear-before])::before';
+            const after = ':is(#floatchat-canvas, [data-floatchat-clear-after])::after';
             let rules = 'html:root, html:root body, ' + canvas + ' { background-color: transparent !important; }'
-                + backdrop + ', ' + backdrop + '::before, ' + backdrop + '::after { background: none !important; backdrop-filter: none !important; }'
+                + [backdrop, before, after].join(', ') + ' { background: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; box-shadow: none !important; }'
                 + drawer + ' { background-color: rgba(' + drawerTint + ', 0.94) !important; }';
             if (host === 'chatgpt.com' || host === 'www.chatgpt.com') {
                 // Decorative footer layers can have pointer-events:none and paint via pseudo-elements.
-                const footer = ':is(#thread-bottom, #thread-bottom-container, [data-thread-scroll-footer="true"])';
-                rules += footer + ', ' + footer + '::before, ' + footer + '::after, '
-                    + footer + ' div:is([aria-hidden="true"], .pointer-events-none):empty { background: none !important; }';
+                const footer = ':is(#thread-bottom, #thread-bottom-container, [data-thread-scroll-footer])';
+                const header = ':is(#page-header, #thread-header)';
+                const paint = footer + ' :is(div, span):is([aria-hidden="true"], .pointer-events-none):empty';
+                const edges = [header, header + '::before', header + '::after',
+                    footer, footer + '::before', footer + '::after',
+                    paint, paint + '::before', paint + '::after'];
+                rules += edges.join(', ') + ' { background: none !important; backdrop-filter: none !important; box-shadow: none !important; }';
             }
             let sheet = document.getElementById(canvasStyleID);
             if (!sheet) {
@@ -89,7 +96,7 @@ extension FloatChatController {
     func setWebBackground(_ view: WKWebView) -> Bool {
         // Gate WebKit's rendering-only option and keep the page opaque when unavailable.
         guard Self.canClearWebBackground else { return false }
-        let translucent = panelTranslucency > 0
+        let translucent = effectivePanelTranslucency > 0
         if (view.value(forKey: "drawsBackground") as? Bool) != !translucent {
             view.setValue(!translucent, forKey: "drawsBackground")
         }
@@ -106,6 +113,7 @@ extension FloatChatController {
                 const marker = 'data-floatchat-canvas';
                 const drawerMarker = 'data-floatchat-drawer';
                 const composerMarker = 'data-floatchat-composer-backdrop';
+                const pseudoMarkers = ['data-floatchat-clear-before', 'data-floatchat-clear-after'];
                 const host = location.hostname.replace(/^www\./, '');
                 const composerSelector = host === 'chatgpt.com' ? '#prompt-textarea'
                     : host === 'claude.ai' ? '.ProseMirror[contenteditable="true"]' : null;
@@ -115,6 +123,7 @@ extension FloatChatController {
                 let marked = previous?.surfaces ?? new Set();
                 let drawers = previous?.drawers ?? new Set();
                 let composerLayers = previous?.composerLayers ?? new Set();
+                let pseudoLayers = previous?.pseudoLayers ?? [new Set(), new Set()];
                 let drawerTint = previous?.tint ?? '32, 32, 32';
                 let watched = new Set();
                 let observedComposer = null;
@@ -132,6 +141,15 @@ extension FloatChatController {
                 const isSquare = style => cornerRadii.every(
                     corner => Number.parseFloat(style['border' + corner + 'Radius']) <= 6);
                 const getComposer = () => composerSelector ? document.querySelector(composerSelector) : null;
+                const protectedContent = 'button, input, textarea, [contenteditable], [role="button"], article, [data-message-author-role]';
+                const hasPaint = style => style.backgroundImage !== 'none' || style.boxShadow !== 'none'
+                    || (style.backdropFilter && style.backdropFilter !== 'none')
+                    || (style.backgroundColor !== 'transparent' && style.backgroundColor !== 'rgba(0, 0, 0, 0)');
+                const reconcile = (before, after, attribute) => {
+                    for (const node of before) if (!after.has(node)) node.removeAttribute(attribute);
+                    for (const node of after) if (!before.has(node)) node.setAttribute(attribute, '');
+                    return after;
+                };
 
                 const update = readColor => {
                     const sheet = document.getElementById(canvasStyleID);
@@ -147,6 +165,26 @@ extension FloatChatController {
                     const navigation = 'aside, nav, [role="navigation"], [role="complementary"]';
 
                     const floatingPanes = new Set();
+                    const edgePaint = new Set();
+                    const nextPseudoLayers = [new Set(), new Set()];
+                    const checkedPaint = new Map();
+                    const checkGeneratedPaint = (node, width, minimum) => {
+                        if ((checkedPaint.get(node) ?? Infinity) <= minimum) return;
+                        checkedPaint.set(node, minimum);
+                        for (let index = 0; index < pseudoMarkers.length; index++) {
+                            const style = getComputedStyle(node, index === 0 ? '::before' : '::after');
+                            if (style.content !== '""' && style.content !== "''") continue;
+                            if ((style.position !== 'absolute' && style.position !== 'fixed') || !isSquare(style)) continue;
+                            const explicitWidth = Number.parseFloat(style.width);
+                            const fillsWidth = Number.isFinite(explicitWidth) ? explicitWidth >= minimum
+                                : style.left !== 'auto' && style.right !== 'auto' && width >= minimum;
+                            // Once marked, the stylesheet removes this paint. Recheck geometry
+                            // on subsequent passes without repeatedly toggling the stylesheet.
+                            if (fillsWidth && (hasPaint(style) || pseudoLayers[index].has(node))) {
+                                nextPseudoLayers[index].add(node);
+                            }
+                        }
+                    };
                     const sample = (y, sampleColor) => [0.08, 0.5, 0.92].map(position => {
                         const x = Math.floor(innerWidth * position);
                         const hits = translucent ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
@@ -163,7 +201,9 @@ extension FloatChatController {
                                 const canvas = size.width >= innerWidth * 0.9 && size.height >= innerHeight * 0.5;
                                 const pane = translucent && (leftEdge || rightEdge) && size.width >= innerWidth * 0.24
                                     && size.width < innerWidth * 0.9 && size.height >= innerHeight * 0.65;
-                                const top = fullWidth && size.top <= 1 && size.bottom > 1 && size.height <= innerHeight * 0.25;
+                                const top = size.width >= innerWidth * 0.55 && size.top <= edgeInset && size.bottom > 1
+                                    && size.height <= Math.min(140, innerHeight * 0.25)
+                                    && (fullWidth || (composerSelector && node.matches('header, [role="banner"]')));
                                 const bottom = fullWidth && size.top < innerHeight - 2 && size.bottom >= innerHeight - 2;
                                 const insetBottom = !fullWidth && size.left >= -2 && size.left <= edgeInset
                                     && size.right >= innerWidth - edgeInset && size.right <= innerWidth + 2
@@ -174,7 +214,7 @@ extension FloatChatController {
                                     // Keep rounded input cards distinct from the flush or inset backing strip.
                                     insetBackdrops.set(node, isSquare(style));
                                 }
-                                if ((canvas || pane || top || ((bottom || insetBottom) && insetBackdrops.get(node))) && !node.matches('button, input, textarea, [contenteditable]')) {
+                                if ((canvas || pane || top || ((bottom || insetBottom) && insetBackdrops.get(node))) && !node.closest(protectedContent)) {
                                     const modal = node.closest('dialog, [role="dialog"], [aria-modal="true"]');
                                     if (modal) {
                                         if (!modalNavigation.has(modal)) modalNavigation.set(modal, !!modal.querySelector(navigation));
@@ -184,6 +224,11 @@ extension FloatChatController {
                                         }
                                     }
                                     surfaces.add(node);
+                                    if (composerSelector && !pane && (top || ((bottom || insetBottom) && insetBackdrops.get(node)))
+                                        && isSquare(getComputedStyle(node))) {
+                                        edgePaint.add(node);
+                                        checkGeneratedPaint(node, size.width, size.width * 0.75);
+                                    }
                                     if (pane || (sampleColor && !sampled)) {
                                         if (!colors.has(node)) {
                                             const style = getComputedStyle(node);
@@ -210,6 +255,7 @@ extension FloatChatController {
                     const top = sample(1, readColor);
                     const middle = translucent ? sample(Math.floor(innerHeight * 0.42), readColor) : [];
                     if (translucent) {
+                        if (composerSelector) sample(Math.min(18, innerHeight - 1), false);
                         sample(Math.floor(innerHeight * 0.75), false);
                         sample(innerHeight - 2, false);
                         sample(Math.max(1, innerHeight - edgeInset), false);
@@ -219,7 +265,7 @@ extension FloatChatController {
                             if (composer) composerResize.observe(composer);
                             observedComposer = composer;
                         }
-                        const nextComposerLayers = new Set();
+                        const nextComposerLayers = edgePaint;
                         if (composer && !composer.closest('dialog, [role="dialog"], [aria-modal="true"]')) {
                             const editor = composer.getBoundingClientRect();
                             // Docked composers can be narrower than the viewport beside a sidebar or artifact.
@@ -232,36 +278,76 @@ extension FloatChatController {
                                     roots.add(parent);
                                 }
                             };
+                            if (host === 'chatgpt.com' && editor.bottom >= innerHeight * 0.55) {
+                                // The bottom paint can be a portal outside the dock, invisible to
+                                // hit tests. Inspect a bounded set of peripheral branches only.
+                                const queue = [...document.body.children].slice(-12);
+                                for (let i = 0; i < queue.length && i < 36; i++) {
+                                    const layer = queue[i];
+                                    if (!layer.matches('div, span, footer') || layer.contains(composer)
+                                        || layer.closest(protectedContent + ', dialog, [role="dialog"], [aria-modal="true"]')) continue;
+                                    const bounds = geometry.get(layer) ?? layer.getBoundingClientRect();
+                                    const positionedAtBottom = bounds.width >= Math.max(editor.width * 0.85, 120)
+                                        && bounds.left < editor.left + 24 && bounds.right > editor.right - 24
+                                        && bounds.top >= editor.top - 16 && bounds.bottom >= innerHeight - 8
+                                        && bounds.height > 0 && bounds.height <= Math.min(180, innerHeight * 0.4);
+                                    const inert = layer.getAttribute('aria-hidden') === 'true';
+                                    if (positionedAtBottom && !layer.childElementCount && !layer.textContent.trim()) {
+                                        const style = getComputedStyle(layer);
+                                        if (isSquare(style) && (inert || style.pointerEvents === 'none'
+                                            || style.position === 'fixed' || style.position === 'absolute')) {
+                                            nextComposerLayers.add(layer);
+                                            checkGeneratedPaint(layer, bounds.width, bounds.width * 0.75);
+                                            observeAncestors(layer);
+                                        }
+                                    }
+                                    if ((positionedAtBottom || inert || bounds.height === 0) && layer.childElementCount <= 5) {
+                                        observeAncestors(layer);
+                                        queue.push(...layer.children);
+                                    }
+                                }
+                            }
                             for (let node = composer.parentElement, depth = 0; node && depth < 10; node = node.parentElement, depth++) {
                                 if (node === document.body || node === root) break;
                                 observeAncestors(node);
                                 const bounds = geometry.get(node) ?? node.getBoundingClientRect();
-                                if (spansEditor(bounds) && nearEditor(bounds) && bounds.height >= 24
-                                    && bounds.height <= innerHeight * 0.45 && isSquare(getComputedStyle(node))) {
-                                    nextComposerLayers.add(node);
-                                    surfaces.add(node);
+                                // Restrict the walk to the dock. The message tree can be very large.
+                                if (bounds.height > innerHeight * 0.45) break;
+                                if (!nearEditor(bounds)) continue;
+                                if (spansEditor(bounds)) {
+                                    const style = getComputedStyle(node);
+                                    if (bounds.height >= 24 && isSquare(style)) {
+                                        nextComposerLayers.add(node);
+                                        surfaces.add(node);
+                                    }
+                                    // A rounded card can own a separate square pseudo-element
+                                    // behind it. Keep the card's actual background and controls.
+                                    checkGeneratedPaint(node, bounds.width, editor.width * 0.85);
                                 }
-                                // Some layouts paint the band in a separate, empty sibling rather than an ancestor.
-                                for (const neighbor of [node.previousElementSibling, node.nextElementSibling]) {
-                                    if (!neighbor?.matches('div, span') || neighbor.childElementCount || neighbor.textContent.trim()) continue;
-                                    const style = getComputedStyle(neighbor);
-                                    if (style.pointerEvents !== 'none' && neighbor.getAttribute('aria-hidden') !== 'true') continue;
-                                    const paint = neighbor.getBoundingClientRect();
-                                    if (spansEditor(paint) && nearEditor(paint) && paint.height > 0
-                                        && paint.height <= innerHeight * 0.45 && isSquare(style)) {
-                                        nextComposerLayers.add(neighbor);
-                                        roots.add(neighbor);
+                                const parent = node.parentElement;
+                                if (!parent || parent === root || parent === document.body || parent.childElementCount > 12) continue;
+                                const queue = [...parent.children].filter(child => child !== node);
+                                for (let i = 0; i < queue.length && i < 18; i++) {
+                                    const layer = queue[i];
+                                    if (!layer.matches('div, span') || layer.matches(protectedContent)) continue;
+                                    const style = getComputedStyle(layer);
+                                    const paint = layer.getBoundingClientRect();
+                                    const paintedStrip = spansEditor(paint) && nearEditor(paint) && paint.height > 0
+                                        && paint.height <= innerHeight * 0.45 && isSquare(style);
+                                    if (paintedStrip && !layer.childElementCount && !layer.textContent.trim()
+                                        && (style.pointerEvents === 'none' || layer.getAttribute('aria-hidden') === 'true'
+                                            || style.position === 'absolute' || style.position === 'fixed')) {
+                                        nextComposerLayers.add(layer);
+                                        observeAncestors(layer);
+                                        checkGeneratedPaint(layer, paint.width, editor.width * 0.85);
+                                    } else if (layer.childElementCount <= 4) {
+                                        queue.push(...layer.children);
                                     }
                                 }
                             }
                         }
-                        for (const node of composerLayers) {
-                            if (!nextComposerLayers.has(node)) node.removeAttribute(composerMarker);
-                        }
-                        for (const node of nextComposerLayers) {
-                            if (!composerLayers.has(node)) node.setAttribute(composerMarker, '');
-                        }
-                        composerLayers = nextComposerLayers;
+                        composerLayers = reconcile(composerLayers, nextComposerLayers, composerMarker);
+                        pseudoLayers = pseudoLayers.map((nodes, index) => reconcile(nodes, nextPseudoLayers[index], pseudoMarkers[index]));
                         for (const node of marked) {
                             if (!surfaces.has(node)) node.removeAttribute(marker);
                         }
@@ -301,6 +387,9 @@ extension FloatChatController {
                         for (const node of marked) node.removeAttribute(marker);
                         for (const node of drawers) node.removeAttribute(drawerMarker);
                         for (const node of composerLayers) node.removeAttribute(composerMarker);
+                        for (let index = 0; index < pseudoMarkers.length; index++) {
+                            for (const node of pseudoLayers[index]) node.removeAttribute(pseudoMarkers[index]);
+                        }
                         sheet?.remove();
                     }
                     return consensus(middle) ?? consensus(top) ?? null;
@@ -328,6 +417,7 @@ extension FloatChatController {
                         get surfaces() { return marked; },
                         get drawers() { return drawers; },
                         get composerLayers() { return composerLayers; },
+                        get pseudoLayers() { return pseudoLayers; },
                         get tint() { return drawerTint; },
                         stop() {
                             observer.disconnect();

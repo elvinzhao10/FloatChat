@@ -20,7 +20,7 @@
 <details>
 <summary>If macOS blocks the first launch</summary>
 
-For ad-hoc-signed builds such as 0.3.4, macOS may require a first-launch approval. After trying to open it, verify the download came from the official release page, then choose **System Settings → Privacy & Security → Open Anyway**. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
+For ad-hoc-signed builds such as 0.4.0, macOS may require a first-launch approval. After trying to open it, verify the download came from the official release page, then choose **System Settings → Privacy & Security → Open Anyway**. [Apple’s first-launch guide](https://support.apple.com/en-us/102445)
 
 </details>
 
@@ -29,11 +29,23 @@ For ad-hoc-signed builds such as 0.3.4, macOS may require a first-launch approva
 | To… | Do this |
 | --- | --- |
 | Switch chats | Click a provider icon or press **⌘1–9**. Scroll the icon strip to reach more tabs. |
-| Keep a conversation | Click the pin to save its link. Instant chats and pins share the same strip, separated by a thin line. Hover a pin for its topic. Unpinning closes the saved tab. |
+| Keep a conversation | Click the pin to save its link. Instant chats and pins share the same strip. Pinned tabs have a small pin badge. Hover a pin for its topic or right-click it to unpin and close it. |
 | Adjust page size | Press **⌘+**, **⌘−**, or **⌘0** to reset. Use the percentage next to any chat in **Settings → Chats** for a slider. Each pinned chat can have its own zoom. |
 | Move or resize | Drag the top edge to move, drag the corner to resize, or double-click the header to expand and restore. |
 | Continue in your browser | Click the arrow to open the current page in your default browser. Use it when a provider requires a browser for sign-in or uploads. |
 | Attach or download a file | Use the site’s upload button, paste, or drag a file in where supported. Completed downloads go to Downloads. Click **Show in Finder** to reveal one. |
+
+## Record audio or dictate
+
+| To… | Do this |
+| --- | --- |
+| Attach audio for notes or a transcript | Choose **Record and Attach Audio** in FloatChat. Capture continues when you hide the window or switch chats. Stop from the toolbar or the red dot. Supported ChatGPT chats receive the M4A in the original composer for you to review and send. |
+| Turn speech into editable text | Enable **Website Dictation** in **Settings → General → Recordings**. Click the website’s microphone and approve **Share Mac Audio**. Finish in the website so it can return the text to its composer. |
+| See live words while the chat is hidden | Enable **Preview dictation when hidden**. Start website dictation, hide FloatChat with **⌘M**, and click the red dot to expand it. Live captions use Apple’s on-device speech model on supported Macs running macOS 26 or later. The first use may download a model for your selected app language. |
+
+<p align="center"><img src="docs/images/dictation-captions.png" width="278" alt="FloatChat’s floating recording dot expanded to show a live caption"></p>
+
+On macOS 14.2 or later, recording and website dictation can include your microphone and Mac playback, including through headphones. macOS may ask you to allow system audio capture. Temporary audio attachments expire after an hour. Turn on **Keep a copy in Downloads** to save a separate file. FloatChat’s live captions stay on your Mac. Website dictation shares the approved audio with the chat site.
 
 ## Add your own chat platform
 
@@ -71,7 +83,7 @@ For manual cleanup, quit FloatChat. In Finder, press **⇧⌘G** and check `~/Li
 <details>
 <summary>Build from source</summary>
 
-With Apple’s command-line tools installed, run `make app`. The bundle is built at `build/FloatChat.app`. See the [build and release guide](docs/releases.md) for tests, automatic updates, and distribution.
+With Apple’s macOS 26 SDK or later installed, run `make app`. The bundle is built at `build/FloatChat.app`. See the [build and release guide](docs/releases.md) for tests, automatic updates, and distribution.
 
 </details>
 

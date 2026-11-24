@@ -258,8 +258,9 @@ final class FloatChatPanel: NSPanel {
     }
 
     override func close() { onCancel?() }
+    override func miniaturize(_ sender: Any?) { onCancel?() }
 
-    /// ⌘W hides and ⌘[ / ⌘] go back / forward; the local shortcuts are caught here too, ahead
+    /// ⌘W and ⌘M hide the panel. ⌘[ / ⌘] go back / forward. Local shortcuts are caught here too, ahead
     /// of the web view (which otherwise claims ⌘ combos). The shortcut window refuses these
     /// combos; a local shortcut saved with one before that still wins, as it's checked first.
     /// Matched by character, like menu key equivalents, so they work on any keyboard layout.
@@ -285,7 +286,7 @@ final class FloatChatPanel: NSPanel {
                 onSelectProvider?(number - 1); return true
             }
             switch event.charactersIgnoringModifiers {
-            case "w": onCancel?(); return true
+            case "w", "m": onCancel?(); return true
             case "[": onGoBack?(); return true
             case "]": onGoForward?(); return true
             default: break

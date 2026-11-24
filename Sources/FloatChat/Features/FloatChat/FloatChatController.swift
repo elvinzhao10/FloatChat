@@ -38,8 +38,21 @@ final class FloatChatController: NSObject {
     var savedSessions: [Provider] = []
     let pinnedDrafts = PinnedDrafts()
     let generationIndicator = GenerationIndicator()
+    let meetingRecorder = MeetingRecorder()
+    let dictationPreview = DictationPreview()
+    lazy var websiteAudioRelay = WebsiteAudioRelay(controller: self)
+    var recordingChat: ChatRecording?
+    var recordingUpload: UUID?
+    var latestRecordingFile: URL?
+    private var recordingNotice: (message: String, key: String)?
+    private var recordingNoticeTask: Task<Void, Never>?
+    private weak var recordingButton: NSButton?
+    private weak var recordingOverlay: RecordingOverlay?
     var pageURLObservation: NSKeyValueObservation?
     var pageTitleObservation: NSKeyValueObservation?
+    var microphoneObservation: NSKeyValueObservation?
+    weak var hiddenMicrophonePage: WKWebView?
+    var hiddenMicrophoneGrace: Task<Void, Never>?
     private weak var pinButton: NSButton?
     private var deletedURLs: Set<String> = []
     var providerOrder: [String] = []
@@ -82,6 +95,13 @@ final class FloatChatController: NSObject {
         selectedIndex = providers.firstIndex { $0.key == saved && !disabledURLs.contains($0.key) }
             ?? providers.firstIndex { !disabledURLs.contains($0.key) } ?? 0
         generationIndicator.onChange = { [weak self] in self?.prunePages() }
+        meetingRecorder.onChange = { [weak self] in
+            self?.updateRecordingButton()
+            self?.updateStatus()
+        }
+        meetingRecorder.onSaved = { [weak self] file, attach in
+            self?.recordingDidSave(file, automaticallyAttach: attach)
+        }
     }
     private var websites: [Provider] {
         Self.builtIns.map { builtIn in
@@ -109,16 +129,23 @@ final class FloatChatController: NSObject {
         return min(40, max(0, value))
     }
 
+    var effectivePanelTranslucency: Double {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 0 : panelTranslucency
+    }
+
     func setPanelTranslucency(_ value: Double) {
-        let wasTranslucent = panelTranslucency > 0
+        let wasTranslucent = effectivePanelTranslucency > 0
         preferences.set(value, forKey: "panelTranslucency")
         settingsFields.panelTranslucency = panelTranslucency
         applySurfaceAppearance()
-        guard wasTranslucent != (panelTranslucency > 0) else { return }
+        if wasTranslucent != (effectivePanelTranslucency > 0) { refreshWebTranslucency() }
+    }
+
+    private func refreshWebTranslucency() {
         for view in parkedPages.values.map(\.view) + [webView].compactMap({ $0 }) {
             configureScripts(view.configuration.userContentController)
             setWebBackground(view)
-            if panelTranslucency == 0, view !== webView {
+            if effectivePanelTranslucency == 0, view !== webView {
                 view.evaluateJavaScript("document.getElementById('floatchat-canvas')?.remove()",
                                         in: nil, in: .defaultClient, completionHandler: nil)
             }
@@ -130,7 +157,7 @@ final class FloatChatController: NSObject {
     }
 
     func applySurfaceAppearance() {
-        let translucency = panelTranslucency
+        let translucency = effectivePanelTranslucency
         // Change only the shared background. Control and web text layers stay opaque.
         contentStack?.layer?.backgroundColor = surfaceColor.withAlphaComponent(1 - translucency / 100).cgColor
         let hidden = translucency == 0
@@ -139,6 +166,11 @@ final class FloatChatController: NSObject {
             panel?.invalidateShadow()
         }
     }
+    var includesSystemAudio: Bool {
+        guard #available(macOS 14.2, *) else { return false }
+        return true
+    }
+
     private var centerOnOpen: Bool { preferences.bool(forKey: "centerOnOpen") }
     var hideOnClickAway: Bool { preferences.bool(forKey: "hideOnClickAway") }
     var zoomKeysEnabled: Bool { preferences.object(forKey: "zoomKeysEnabled") as? Bool ?? true }
@@ -152,6 +184,21 @@ final class FloatChatController: NSObject {
             prunePages()
         } else if key == "zoomKeysEnabled" {
             panel?.zoomKeysEnabled = enabled
+        } else if key == "websiteMacAudio" {
+            if !enabled {
+                dictationPreview.clear()
+                websiteAudioRelay.stop()
+            }
+            let pages = [webView].compactMap { $0 } + parkedPages.values.map(\.view)
+            for page in pages {
+                configureScripts(page.configuration.userContentController)
+                let script = "globalThis.floatChatWebsiteAudioEnabled = \(enabled);" + WebsiteAudioRelay.script
+                page.evaluateJavaScript(script, in: nil, in: .page, completionHandler: nil)
+            }
+        } else if key == "hiddenDictationPreview", !enabled {
+            websiteAudioRelay.stopCaptions()
+            dictationPreview.clear()
+            updateRecordingOverlay()
         }
         updateSettings()
     }
@@ -177,6 +224,7 @@ final class FloatChatController: NSObject {
     func deleteProvider(_ index: Int) {
         guard providers.indices.contains(index), providers.count > 1 else { return }
         let provider = providers[index]
+        guard !meetingRecorder.isRecording || provider.key != recordingChat?.key else { NSSound.beep(); return }
         if index == selectedIndex, let next = providers.indices.first(where: { $0 != index }) {
             disabledURLs.remove(providers[next].key)
             preferences.set(Array(disabledURLs), forKey: "disabledProviders")
@@ -204,6 +252,7 @@ final class FloatChatController: NSObject {
     }
     func toggleProvider(_ index: Int) {
         let key = providers[index].key
+        guard !meetingRecorder.isRecording || key != recordingChat?.key else { NSSound.beep(); return }
         if disabledURLs.contains(key) { disabledURLs.remove(key) }
         else {
             guard providers.filter({ !disabledURLs.contains($0.key) }).count > 1 else { NSSound.beep(); return }
@@ -265,6 +314,9 @@ final class FloatChatController: NSObject {
             hideOnClickAway: hideOnClickAway,
             zoomKeysEnabled: zoomKeysEnabled,
             showGenerationIndicator: preferences.bool(forKey: "showGenerationIndicator"),
+            websiteMacAudio: preferences.bool(forKey: "websiteMacAudio"),
+            hiddenDictationPreview: preferences.bool(forKey: "hiddenDictationPreview"),
+            keepRecordingCopyInDownloads: preferences.bool(forKey: "keepRecordingCopyInDownloads"),
             setPanelPreference: { [weak self] value, key in self?.setPanelPreference(value, for: key) },
             zoomFor: { [weak self] key in
                 guard let self, let provider = self.providers.first(where: { $0.key == key }) else { return 1 }
@@ -292,6 +344,7 @@ final class FloatChatController: NSObject {
         }
     }
     private func confirmClearWebsiteData() {
+        guard !meetingRecorder.isBusy else { NSSound.beep(); return }
         guard !clearingWebsiteData, let settingsWindow else { return }
         let alert = NSAlert()
         alert.messageText = AppText.t("Clear all website data?")
@@ -299,7 +352,7 @@ final class FloatChatController: NSObject {
         alert.addButton(withTitle: AppText.t("Cancel"))
         alert.addButton(withTitle: AppText.t("Clear Website Data")).hasDestructiveAction = true
         alert.beginSheetModal(for: settingsWindow) { [weak self] response in
-            guard response == .alertSecondButtonReturn, let self else { return }
+            guard response == .alertSecondButtonReturn, let self, !self.meetingRecorder.isBusy else { return }
             self.clearingWebsiteData = true
             self.tearDown()
             self.updateSettings()
@@ -327,6 +380,10 @@ final class FloatChatController: NSObject {
             for child in view.subviews { localize(child) }
         }
         if let chromeView { localize(chromeView) }
+        updateRecordingButton()
+        updateRecordingOverlay()
+        providerTabs?.setAccessibilityLabel(AppText.t("Instant Chats"))
+        pinnedTabs?.setAccessibilityLabel(AppText.t("Pinned Conversations"))
         refreshPicker()
     }
     func pageRequest(_ url: URL) -> URLRequest {
@@ -351,7 +408,11 @@ final class FloatChatController: NSObject {
         } catch (_) {} })();
         """
         scripts.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        if panelTranslucency > 0, Self.canClearWebBackground {
+        let websiteAudioEnabled = preferences.bool(forKey: "websiteMacAudio")
+        let websiteAudio = "globalThis.floatChatWebsiteAudioEnabled = \(websiteAudioEnabled);" + WebsiteAudioRelay.script
+        scripts.addUserScript(WKUserScript(source: websiteAudio, injectionTime: .atDocumentStart,
+                                           forMainFrameOnly: true, in: .page))
+        if effectivePanelTranslucency > 0, Self.canClearWebBackground {
             let canvas = #"""
                 (() => {
                     \#(Self.canvasStylesheet)
@@ -363,12 +424,13 @@ final class FloatChatController: NSObject {
         }
     }
     private func reloadForLanguage() {
+        guard !meetingRecorder.isRecording else { NSSound.beep(); return }
         let alert = NSAlert()
         alert.messageText = AppText.t("Reload open chats?")
         alert.informativeText = AppText.t("This keeps sign-ins and pinned links. Unsent drafts in open pages may be lost.")
         alert.addButton(withTitle: AppText.t("Cancel"))
         alert.addButton(withTitle: AppText.t("Reload"))
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        guard alert.runModal() == .alertSecondButtonReturn, !meetingRecorder.isRecording else { return }
         rememberPinnedPage()
         for page in parkedPages.values { releasePage(page.view) }
         parkedPages.removeAll()
@@ -517,7 +579,7 @@ final class FloatChatController: NSObject {
     }
     @objc private func goBack(_ sender: Any?) { webView?.goBack() }
     @objc private func goForward(_ sender: Any?) { webView?.goForward() }
-    @objc private func reloadPage(_ sender: Any?) { webView?.reload() }
+    @objc private func reloadPage(_ sender: Any?) { if let webView { reload(webView) } }
 
     private func toolbarButton(_ symbol: String, label: String, action: Selector) -> NSButton {
         let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
@@ -571,6 +633,7 @@ final class FloatChatController: NSObject {
         }
         updateTabPreviews()
         syncReplyIndicators()
+        updateStatus()
         let selectedKey = provider.key
         DispatchQueue.main.async { [weak self] in
             guard let self, self.providers[self.selectedIndex].key == selectedKey else { return }
@@ -579,6 +642,51 @@ final class FloatChatController: NSObject {
                 button.scrollToVisible(button.bounds)
             }
         }
+    }
+
+    @objc func toggleRecording() {
+        if meetingRecorder.isRecording { meetingRecorder.stop(); return }
+        guard !meetingRecorder.isBusy, recordingUpload == nil else { return }
+        if panel?.isVisible != true { show() }
+        guard let view = webView, let url = view.url, Self.isHTTPSPage(url), failureURL == nil else {
+            showRecordingNotice("Open a loaded chat to start recording.")
+            return
+        }
+        guard !websiteIsCapturing(view) else {
+            showRecordingNotice("Stop website dictation, then use Record Audio for Mac sound.")
+            return
+        }
+        let provider = providers[selectedIndex]
+        let source = ChatRecording(key: provider.key, view: view, url: url)
+        meetingRecorder.toggle(includeSystemAudio: includesSystemAudio, preferences: preferences) { [weak self] in
+            guard let self, self.panel?.isVisible == true, source.matches(self.webView, key: self.providers[self.selectedIndex].key),
+                  !self.websiteIsCapturing(view) else { return false }
+            self.recordingChat = source
+            return true
+        }
+    }
+
+    func updateRecordingButton() {
+        let isRecording = meetingRecorder.isRecording
+        let siteRecording = websiteIsCapturing(webView)
+        let icon = isRecording ? "stop.circle.fill" : siteRecording ? "mic.fill" : "record.circle"
+        let label: String
+        if websiteAudioRelay.isCapturing(webView) {
+            label = AppText.t("Website dictation is active. Use the website’s controls to finish.")
+        } else if siteRecording && !isRecording {
+            label = AppText.t("Website microphone is active")
+        } else if isRecording && meetingRecorder.recordsSystemAudio {
+            label = [AppText.t("Recording microphone and system audio. Click to stop."),
+                     AppText.t(meetingRecorder.systemAudioStatus)].joined(separator: " · ")
+        } else if !isRecording && includesSystemAudio {
+            label = AppText.t("Record and attach microphone and system audio")
+        } else {
+            label = meetingRecorder.actionTitle
+        }
+        recordingButton?.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
+        recordingButton?.contentTintColor = isRecording || siteRecording ? .systemRed : nil
+        recordingButton?.toolTip = label
+        recordingButton?.setAccessibilityLabel(label)
     }
 
     private func updatePinButton() {
@@ -685,6 +793,7 @@ final class FloatChatController: NSObject {
         let edited = Provider(name: name, url: url, builtInKey: builtInKey)
         let selected = providers[selectedIndex].key
         if url != provider.url {
+            guard !meetingRecorder.isRecording || provider.key != recordingChat?.key else { NSSound.beep(); return false }
             if selected == provider.key { parkActivePage() }
             if let old = parkedPages.removeValue(forKey: provider.key) { releasePage(old.view) }
         }
@@ -743,6 +852,17 @@ final class FloatChatController: NSObject {
         let identity = NSMenuItem(title: host, action: nil, keyEquivalent: "")
         identity.isEnabled = false
         menu.addItem(identity)
+        if provider.isPinned {
+            menu.addItem(ActionMenuItem(AppText.t("Unpin & close")) { [weak self] in
+                guard let self, let index = self.providers.firstIndex(where: { $0.key == provider.key }) else { return }
+                self.unpinProvider(index)
+            })
+        } else if provider.key == providers[selectedIndex].key, let url = page?.url, canRemember(url, provider: provider) {
+            menu.addItem(ActionMenuItem(AppText.t("Pin this conversation")) { [weak self] in
+                guard let self, self.providers[self.selectedIndex].key == provider.key else { return }
+                self.togglePin(nil)
+            })
+        }
         menu.addItem(.separator())
         for (label, delta) in [("Zoom In", 0.1 as Double?), ("Zoom Out", -0.1), ("Actual Size", nil)] {
             menu.addItem(ActionMenuItem(AppText.t(label)) { [weak self] in self?.changeZoom(for: provider, by: delta) })
@@ -849,6 +969,7 @@ final class FloatChatController: NSObject {
     }
     func togglePin(url: URL?, title: String?) {
         var provider = providers[selectedIndex]
+        guard !meetingRecorder.isRecording || provider.key != recordingChat?.key else { NSSound.beep(); return }
         let oldKey = provider.key
         let oldZoom = zoom(for: provider)
         if provider.isPinned {
@@ -991,6 +1112,7 @@ final class FloatChatController: NSObject {
     func show() {
         guard !clearingWebsiteData else { return }
         let panel = self.panel ?? makePanel()
+        clearHiddenWebsiteCapture()
         if centerOnOpen, !panel.isVisible { center(panel, on: NSScreen.screens.first) }
         keepPanelReachable(panel)
         attachSelectedPage()
@@ -1003,7 +1125,9 @@ final class FloatChatController: NSObject {
         panel.invalidateShadow()
         focusSelectedPage()
         shownAt = .now
+        updateRecordingOverlay()
         syncReplyIndicators()
+        attachPendingRecording()
     }
 
     /// A Space switch makes macOS activate an app on the new Space (Finder on the desktop, the
@@ -1013,6 +1137,13 @@ final class FloatChatController: NSObject {
         guard workspaceObservers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
         workspaceObservers = [
+            center.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil,
+                               queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.applySurfaceAppearance()
+                    self?.refreshWebTranslucency()
+                }
+            },
             center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil,
                                queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.spaceDidChange() }
@@ -1040,6 +1171,7 @@ final class FloatChatController: NSObject {
     }
 
     private func spaceDidChange() {
+        updateRecordingOverlay()
         guard let panel, panel.isVisible else { return }
         let recent = { (date: Date?) in date.map { Date.now.timeIntervalSince($0) < 1 } ?? false }
         guard panel.isKeyWindow || recent(lostKeyAt) || recent(shownAt) else { return }
@@ -1066,10 +1198,22 @@ final class FloatChatController: NSObject {
         defer { isHiding = false }
         rememberPinnedPage()
         keepFocusUntil = nil
-        panel.orderOut(nil)
         recentDownload = nil
-        parkActivePage()
-        failureURL = nil
+        // A live dictation stream belongs to WebKit. Keeping its view attached also preserves the composer.
+        if let view = webView, websiteIsCapturing(view) || dictationPreview.canWatch(view) {
+            hiddenMicrophonePage = view
+            view.setCameraCaptureState(.none, completionHandler: nil)
+        }
+        panel.orderOut(nil)
+        if hiddenMicrophonePage == nil {
+            parkActivePage()
+            failureURL = nil
+        }
+        updateRecordingOverlay()
+        if let view = hiddenMicrophonePage {
+            dictationPreview.startWhileHidden(view) { [weak self] in self?.updateRecordingOverlay() }
+            websiteCaptureChanged(in: view)
+        }
         prunePages()
         if restoreFocus { previousApp?.activate() }
     }
@@ -1103,6 +1247,7 @@ final class FloatChatController: NSObject {
         failureURL = nil
         recentDownload = nil
         panel?.orderOut(nil)
+        microphoneObservation = nil
         if let webView { releasePage(webView) }
         panel?.contentView = nil
         panel = nil
@@ -1120,6 +1265,9 @@ final class FloatChatController: NSObject {
         pageColorObservation = nil
         pageURLObservation = nil
         pageTitleObservation = nil
+        clearHiddenWebsiteCapture()
+        dictationPreview.clear()
+        meetingRecorder.updateIndicator(near: nil, action: nil)
         crashReloads = []
     }
 
@@ -1157,9 +1305,13 @@ final class FloatChatController: NSObject {
         let tabs = NSStackView()
         tabs.orientation = .horizontal
         tabs.spacing = 4
+        tabs.setAccessibilityRole(.group)
+        tabs.setAccessibilityLabel(AppText.t("Instant Chats"))
         let pins = NSStackView()
         pins.orientation = .horizontal
         pins.spacing = 4
+        pins.setAccessibilityRole(.group)
+        pins.setAccessibilityLabel(AppText.t("Pinned Conversations"))
         let separator = NSBox()
         separator.boxType = .separator
         separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
@@ -1187,8 +1339,11 @@ final class FloatChatController: NSObject {
         pinButton = pin
         let browser = toolbarButton("arrow.up.right.square", label: "Continue in Default Browser", action: #selector(openInBrowser(_:)))
         let settings = toolbarButton("slider.horizontal.3", label: "Settings", action: #selector(showSettings))
-        let controls = NSStackView(views: [pin, browser, settings])
-        controls.spacing = 12
+        let record = toolbarButton("record.circle", label: "Record and Attach Audio", action: #selector(toggleRecording))
+        recordingButton = record
+        updateRecordingButton()
+        let controls = NSStackView(views: [pin, record, browser, settings])
+        controls.spacing = 10
         controls.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(controls)
         NSLayoutConstraint.activate([
@@ -1243,6 +1398,13 @@ final class FloatChatController: NSObject {
                 layer.bottomAnchor.constraint(equalTo: root.bottomAnchor)
             ])
         }
+        let overlay = RecordingOverlay(target: self, action: #selector(recordingOverlayClicked))
+        root.addSubview(overlay, positioned: .above, relativeTo: stack)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            overlay.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10)
+        ])
+        recordingOverlay = overlay
         panel.contentView = root
         let grip = ResizeGrip()
         resizeGrip = grip
@@ -1325,24 +1487,96 @@ final class FloatChatController: NSObject {
         return slowPage || (offline && waitingForPage) ? chatURL : nil
     }
 
+    private func updateRecordingOverlay() {
+        let isOriginalTab = recordingChat?.key == providers[selectedIndex].key
+        let visible = panel?.isVisible == true && panel?.isOnActiveSpace == true
+        let websiteCapturing = websiteIsCapturing(webView)
+        let offersPreview = !visible && webView.map { view in
+            hiddenMicrophonePage === view && dictationPreview.canWatch(view)
+        } == true
+        let indicatorAction: MeetingRecorder.IndicatorAction?
+        if meetingRecorder.isRecording && !(isOriginalTab && recordingButton != nil && visible) {
+            indicatorAction = meetingRecorder.recordsSystemAudio ? .stopCombinedRecording : .stopRecording
+        } else if websiteCapturing && !visible {
+            indicatorAction = .reopenWebsite
+        } else if offersPreview {
+            indicatorAction = .websiteTranscript
+        } else {
+            indicatorAction = nil
+        }
+        meetingRecorder.updateIndicator(near: panel?.frame, action: indicatorAction, websiteLevel: { [weak self] in
+            self?.websiteAudioRelay.audioLevel ?? 0
+        }, offersPreview: offersPreview, preview: offersPreview ? dictationPreview.presentation : nil,
+           onReopenChat: { [weak self] in self?.show() }) { [weak self] in
+            guard let self else { return }
+            if let view = self.webView, self.dictationPreview.toggle(in: view) { return }
+            self.show()
+        }
+        guard let recording = recordingChat, isOriginalTab,
+              !meetingRecorder.isRecording, !websiteCapturing else {
+            recordingOverlay?.display(nil)
+            return
+        }
+        guard let file = recording.file,
+              FileManager.default.fileExists(atPath: file.path) else {
+            recordingOverlay?.display(nil)
+            return
+        }
+        if recording.downloadCopyFailed {
+            recordingOverlay?.display("Downloads copy couldn’t be saved.", action: "Save…")
+        } else if !recording.attachmentConfirmed,
+                  recording.attachmentFailed || !supportsRecordingAttachment(to: recording.url)
+                    || !recording.matches(webView, key: providers[selectedIndex].key) {
+            let message = recording.didHandOff ? "Attachment couldn’t be confirmed" : "Recording couldn’t attach"
+            recordingOverlay?.display(message, action: "Save…", help: "Save a copy to attach it manually.")
+        } else {
+            recordingOverlay?.display(nil)
+        }
+    }
+
+    @objc private func recordingOverlayClicked() {
+        guard let recording = recordingChat, recording.key == providers[selectedIndex].key else { return }
+        if meetingRecorder.isRecording {
+            meetingRecorder.stop()
+        } else if recording.file != nil {
+            saveLastRecording()
+        }
+    }
+
+    func showRecordingNotice(_ message: String, for key: String? = nil) {
+        recordingNotice = (message, key ?? providers[selectedIndex].key)
+        recordingNoticeTask?.cancel()
+        recordingNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.recordingNotice = nil
+            self?.updateStatus()
+        }
+        updateStatus()
+    }
+
     func updateStatus() {
+        updateRecordingOverlay()
         let message: String?
         if offline { message = "You’re offline." }
         else if failureURL != nil { message = "Couldn’t load this website." }
         else if slowPage { message = "Still loading…" }
         else if waitingForPage { message = "Loading…" }
-        else if recentDownload != nil { message = "Downloaded" }
+        else if let recordingNotice, recordingNotice.key == providers[selectedIndex].key {
+            message = recordingNotice.message
+        } else if recentDownload != nil { message = "Downloaded" }
         else { message = nil }
 
         notice?.isHidden = message == nil
         noticeBrowser?.isHidden = retryURL == nil
-        noticeAction?.isHidden = retryURL == nil && (waitingForPage || offline)
+        noticeAction?.isHidden = retryURL == nil && (waitingForPage || offline || recentDownload == nil)
         noticeLabel?.stringValue = message.map(AppText.t) ?? ""
         noticeAction?.title = AppText.t(retryURL == nil ? "Show in Finder" : "Retry")
     }
 
     @objc private func noticeActionClicked() {
         if let url = retryURL {
+            guard !isRecordingPage(webView) else { return }
             crashReloads.removeAll()
             failureURL = nil
             stopTrackingPageLoad()

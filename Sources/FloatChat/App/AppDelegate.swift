@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
         menuController = controller
 
+        MeetingRecorder.trashExpiredRecordings()
+        MeetingRecorder.cleanUpStagingFromPreviousLaunch()
         AppUpdates.start()
         manager.start()
         (manager.features.first as? FloatChatFeature)?.show()
@@ -30,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Log.app.info("FloatChat terminating; restoring ChatGPT state")
+        (manager.features.first as? FloatChatFeature)?.finishRecording()
         manager.disableAll()
     }
 }

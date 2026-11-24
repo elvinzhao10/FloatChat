@@ -49,6 +49,9 @@ struct ChatSettingsView: View {
     let hideOnClickAway: Bool
     let zoomKeysEnabled: Bool
     let showGenerationIndicator: Bool
+    let websiteMacAudio: Bool
+    let hiddenDictationPreview: Bool
+    let keepRecordingCopyInDownloads: Bool
     let setPanelPreference: (Bool, String) -> Void
     let zoomFor: (String) -> Double
     let setZoom: (String, Double) -> Void
@@ -272,6 +275,25 @@ struct ChatSettingsView: View {
                                help: "Hide the chat window when you click elsewhere. Settings can stay open alongside it.")
                 toggleWithHelp("Show reply indicator", isOn: panelSetting(showGenerationIndicator, "showGenerationIndicator"),
                                help: "Background replies have a small ring on their tab. A movable dot appears when the window is hidden.")
+            }
+            Section {
+                if #available(macOS 14.2, *) {
+                    Toggle(AppText.t("Website Dictation"),
+                           isOn: panelSetting(websiteMacAudio, "websiteMacAudio"))
+                    if websiteMacAudio {
+                        Toggle(AppText.t("Preview dictation when hidden"),
+                               isOn: panelSetting(hiddenDictationPreview, "hiddenDictationPreview"))
+                            .help(AppText.t("Click the dictation dot for live on-device captions on supported Macs. The website’s returned text can appear after you finish."))
+                    }
+                }
+                Toggle(AppText.t("Keep a copy in Downloads"),
+                       isOn: panelSetting(keepRecordingCopyInDownloads, "keepRecordingCopyInDownloads"))
+            } header: {
+                Text(AppText.t("Recordings"))
+            } footer: {
+                if #available(macOS 14.2, *) {
+                    Text(AppText.t("Use the website’s microphone for editable text. Use FloatChat’s record button to attach audio."))
+                }
             }
             Section(AppText.t("Web Pages")) {
                 LabeledContent {

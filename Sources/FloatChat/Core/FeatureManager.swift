@@ -88,8 +88,7 @@ final class FeatureManager {
             source.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
                     self?.log.info("Received signal \(sig), restoring and exiting")
-                    self?.disableAll()
-                    exit(0)
+                    NSApp.terminate(nil)
                 }
             }
             source.resume()

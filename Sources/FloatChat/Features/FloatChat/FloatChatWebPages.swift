@@ -17,6 +17,9 @@ extension FloatChatController {
         updateSettings()
     }
     func releasePage(_ view: WKWebView) {
+        dictationPreview.clear(in: view)
+        websiteAudioRelay.stop(in: view)
+        invalidateRecordingPage(view)
         generationIndicator.stopWatching(view)
         view.stopLoading()
         view.setMicrophoneCaptureState(.none, completionHandler: nil)
@@ -30,8 +33,22 @@ extension FloatChatController {
         let instantLifetime = Double(retentionMinutes(forPinned: false)) * 60
         let pinnedLifetime = Double(retentionMinutes(forPinned: true)) * 60
         var nextExpiry: Date?
-        for (key, page) in parkedPages where !generationIndicator.isWatching(page.view) {
-            let expiry = page.parkedAt.addingTimeInterval(page.isPinned ? pinnedLifetime : instantLifetime)
+        for (key, page) in parkedPages where !generationIndicator.isWatching(page.view) && !isRecordingPage(page.view) {
+            let normalExpiry = page.parkedAt.addingTimeInterval(page.isPinned ? pinnedLifetime : instantLifetime)
+            let recordingGrace = if let recording = recordingChat, recording.view === page.view {
+                if recording.pendingAttachment {
+                    recording.savedAt?.addingTimeInterval(MeetingRecorder.stagingLifetime)
+                } else if recording.didHandOff {
+                    // The audio is an unsent draft. Start its review window at the handoff,
+                    // even if the chat's ordinary retention expired during the recording.
+                    recording.savedAt?.addingTimeInterval(5 * 60)
+                } else {
+                    nil as Date?
+                }
+            } else {
+                nil as Date?
+            }
+            let expiry = max(normalExpiry, recordingGrace ?? .distantPast)
             if expiry <= now {
                 releasePage(page.view)
                 parkedPages.removeValue(forKey: key)
@@ -51,14 +68,55 @@ extension FloatChatController {
 
     func takeParkedPage(for provider: Provider) -> ParkedPage? {
         guard let page = parkedPages.removeValue(forKey: provider.key) else { return nil }
-        if let pinnedURL = provider.conversationURL, let currentURL = page.view.url, currentURL != pinnedURL {
+        if !isRecordingPage(page.view), let pinnedURL = provider.conversationURL,
+           let currentURL = page.view.url, currentURL != pinnedURL {
             releasePage(page.view)
             return nil
         }
         return page
     }
+    func websiteCaptureInProgress(_ state: WKMediaCaptureState) -> Bool {
+        state == .active || state == .muted
+    }
+
+    func clearHiddenWebsiteCapture() {
+        dictationPreview.pause()
+        hiddenMicrophoneGrace?.cancel()
+        hiddenMicrophoneGrace = nil
+        hiddenMicrophonePage = nil
+    }
+
+    func websiteIsCapturing(_ view: WKWebView?) -> Bool {
+        guard let view else { return false }
+        return websiteAudioRelay.isCapturing(view) || websiteCaptureInProgress(view.microphoneCaptureState)
+    }
+
+    func websiteCaptureChanged(in view: WKWebView) {
+        guard view === webView else { return }
+        updateRecordingButton()
+        updateStatus()
+        guard hiddenMicrophonePage === view, panel?.isVisible == false else { return }
+        if websiteIsCapturing(view) {
+            hiddenMicrophoneGrace?.cancel()
+            hiddenMicrophoneGrace = nil
+        } else if hiddenMicrophoneGrace == nil {
+            // Leave time for the site to return dictated text after it releases the microphone.
+            hiddenMicrophoneGrace = Task { [weak self, weak view] in
+                try? await Task.sleep(for: DictationPreview.resultLifetime)
+                guard !Task.isCancelled, let self, let view, self.hiddenMicrophonePage === view,
+                      self.webView === view, self.panel?.isVisible == false else { return }
+                self.parkActivePage()
+                self.prunePages()
+            }
+        }
+    }
+
     func parkActivePage() {
         guard let view = webView else { return }
+        clearHiddenWebsiteCapture()
+        dictationPreview.clear(in: view)
+        microphoneObservation = nil
+        websiteAudioRelay.stop(in: view)
         let provider = providers[selectedIndex]
         let key = provider.key
         var parked = ParkedPage(view: view, parkedAt: .now, isPinned: provider.isPinned, failureURL: failureURL)
@@ -73,7 +131,7 @@ extension FloatChatController {
         }
         cancelPageAppearance()
         stopTrackingPageLoad()
-        if panelTranslucency > 0 {
+        if effectivePanelTranslucency > 0 {
             view.evaluateJavaScript("globalThis.floatChatCanvas?.stop()", in: nil, in: .defaultClient, completionHandler: nil)
         }
         panel?.detachKeyboardFromPage(view)
@@ -87,6 +145,8 @@ extension FloatChatController {
         pageColorObservation = nil
         pageURLObservation = nil
         pageTitleObservation = nil
+        updateRecordingButton()
+        updateStatus()
     }
 
     func attachSelectedPage() {
@@ -102,18 +162,24 @@ extension FloatChatController {
         contentStack.addArrangedSubview(view)
         if let resizeGrip { contentStack.addSubview(resizeGrip, positioned: .above, relativeTo: nil) }
         observePageColor(view)
+        microphoneObservation = view.observe(\.microphoneCaptureState, options: [.initial, .new]) { [weak self] view, _ in
+            MainActor.assumeIsolated { self?.websiteCaptureChanged(in: view) }
+        }
         updateTabSelection()
         updateWebsiteIdentity()
         updateStatus()
         if cached == nil { view.load(pageRequest(chatURL)) }
         trackPageLoad(view)
         focusSelectedPage()
+        attachPendingRecording()
     }
 
     private func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.mediaTypesRequiringUserActionForPlayback = .all
+        config.userContentController.addScriptMessageHandler(websiteAudioRelay, contentWorld: .page,
+                                                              name: WebsiteAudioRelay.handler)
         configureScripts(config.userContentController)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = Self.safariUserAgent
@@ -169,8 +235,7 @@ extension FloatChatController {
     }
 
     /// ~/Downloads/<name>, or "<name> 2", "<name> 3", … if that already exists (Finder-style).
-    private static func uniqueDownloadURL(suggestedFilename: String, reserved: Set<URL>) -> URL {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+    static func uniqueDownloadURL(suggestedFilename: String, reserved: Set<URL>, in downloads: URL = .downloadsDirectory) -> URL {
         var name = (suggestedFilename as NSString).lastPathComponent
             .replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "/", with: "-")
@@ -219,6 +284,11 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         let active = webView === self.webView
         let url = navigationAction.request.url
+        if navigationAction.targetFrame?.isMainFrame == true, isRecordingPage(webView),
+           !navigationAction.shouldPerformDownload {
+            decisionHandler(.cancel)
+            return
+        }
         if let scheme = url?.scheme?.lowercased(), !["https", "about", "blob", "data"].contains(scheme) {
             decisionHandler(.cancel); return
         }
@@ -264,6 +334,7 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        dictationPreview.clear(in: webView)
         if webView === self.webView { trackPageLoad(webView); updateStatus() }
     }
 
@@ -286,9 +357,12 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
         }
         rememberPinnedPage()
         updateTabPreviews()
+        attachPendingRecording()
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        websiteAudioRelay.stop(in: webView)
+        invalidateRecordingPage(webView)
         if webView === self.webView {
             waitingForPage = false
             updateStatus()
@@ -308,6 +382,7 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
     /// macOS may kill the web content process (often while hidden, under memory pressure), which
     /// leaves the view blank. Discard parked pages and retry active pages up to three times.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        websiteAudioRelay.stop(in: webView)
         guard webView === self.webView else {
             if let key = parkedPages.first(where: { $0.value.view === webView })?.key {
                 releasePage(webView); parkedPages.removeValue(forKey: key); prunePages()
@@ -323,24 +398,41 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
             updateStatus()
             return
         }
+        if isRecordingPage(webView) {
+            stopTrackingPageLoad()
+            failureURL = chatURL
+            updateStatus()
+            return
+        }
         crashReloads.append(now)
         log.info("Web content process terminated; reloading")
         reload(webView)
     }
 
     func reload(_ webView: WKWebView) {
+        guard !isRecordingPage(webView) else { return }
         if webView.url != nil { webView.reload() } else { webView.load(pageRequest(chatURL)) }
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping @MainActor ([URL]?) -> Void) {
+        if let file = takeRecordingAttachment(in: webView, frame: frame) {
+            completionHandler([file])
+            return
+        }
         guard webView === self.webView, let panel, panel.isVisible else { return completionHandler(nil) }
         let open = NSOpenPanel()
         open.allowsMultipleSelection = parameters.allowsMultipleSelection
         open.canChooseDirectories = parameters.allowsDirectories
+        let requestedURL = webView.url
+        if frame.isMainFrame, requestedURL?.scheme == "https",
+           FileManager.default.fileExists(atPath: MeetingRecorder.folder.path) {
+            open.accessoryView = RecordingPickerShortcut(picker: open)
+            open.isAccessoryViewDisclosed = true
+        }
         open.beginSheetModal(for: panel) { [weak self, weak webView] response in
-            guard let self, let webView, webView === self.webView, panel.isVisible else {
+            guard let self, let webView, webView === self.webView, panel.isVisible, webView.url == requestedURL else {
                 return completionHandler(nil)
             }
             completionHandler(response == .OK ? open.urls : nil)
@@ -357,7 +449,13 @@ extension FloatChatController: WKUIDelegate, WKNavigationDelegate, WKDownloadDel
             && frame.isMainFrame && isProviderHost(origin.host, provider: provider)
             && webView.url?.host?.lowercased() == origin.host.lowercased()
             && (webView.url?.port ?? 443) == (origin.port == 0 ? 443 : origin.port)
-        decisionHandler(allowed ? .prompt : .deny)
+        // Websites receive audio exclusively through the consented Core Audio relay.
+        // Never open a hardware microphone on a webpage's behalf, including in subframes.
+        decisionHandler(Self.nativeWebsiteCaptureDecision(type, fromTrustedPage: allowed))
+    }
+
+    static func nativeWebsiteCaptureDecision(_ type: WKMediaCaptureType, fromTrustedPage trusted: Bool) -> WKPermissionDecision {
+        trusted && type == .camera ? .prompt : .deny
     }
 
     // MARK: Downloads (WKDownloadDelegate)

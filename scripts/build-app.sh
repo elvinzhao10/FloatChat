@@ -76,7 +76,9 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>${APP_NAME} uses the microphone for voice input.</string>
+  <key>NSAudioCaptureUsageDescription</key><string>${APP_NAME} includes sound playing on your Mac in recordings you start.</string>
+  <key>NSMicrophoneUsageDescription</key><string>${APP_NAME} uses the microphone for voice input and recordings you start.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>${APP_NAME} can show optional on-device captions for dictation you start.</string>
   <key>NSCameraUsageDescription</key><string>${APP_NAME} uses the camera when you take a photo or share video in a chat.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>${APP_NAME} saves files you download from a chat to your Downloads folder.</string>
 </dict>

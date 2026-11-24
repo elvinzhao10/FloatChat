@@ -60,6 +60,10 @@ final class FloatChatFeature: Feature {
     // MARK: Menu
 
     func show() { chat.show() }
+    func finishRecording() {
+        chat.websiteAudioRelay.stop()
+        chat.meetingRecorder.stop(showErrors: false, attachToChat: false)
+    }
 
     func menuItems() -> [NSMenuItem] { chat.quickMenuItems() }
 

@@ -1,8 +1,298 @@
 import AppKit
+import AVFoundation
 import WebKit
 
 #if DEBUG
 extension FloatChatController {
+    static func runAudioSelfTest() -> Bool {
+        _ = NSApplication.shared
+        print("Checking mixed audio levels and M4A encoding")
+        guard runAudioMixSelfTest(interleaved: false), runAudioMixSelfTest(interleaved: true),
+              runAudioMixSelfTest(interleaved: false, systemAudible: false) else { return false }
+
+        print("Checking that the website receives mixed audio and stops its sharing session")
+        guard runWebsiteAudioSelfTest() else { return false }
+
+        print("Checking hidden dictation preview isolates new text from the existing draft")
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 420, height: 560))
+        let url = URL(string: "https://chatgpt.com/c/preview-fixture")!
+        view.loadHTMLString("<textarea id='prompt-textarea'>local draft</textarea>", baseURL: url)
+        func wait(_ condition: () -> Bool) -> Bool {
+            let deadline = Date.now.addingTimeInterval(3)
+            while !condition(), Date.now < deadline {
+                RunLoop.current.run(until: Date.now.addingTimeInterval(0.025))
+            }
+            return condition()
+        }
+        var loaded = false
+        guard wait({ view.url == url && !view.isLoading }) else { return false }
+        view.evaluateJavaScript("document.querySelector('textarea').value") { value, _ in
+            loaded = value as? String == "local draft"
+        }
+        guard wait({ loaded }) else { return false }
+        let preview = DictationPreview()
+        let recorder = MeetingRecorder()
+        defer {
+            preview.clear()
+            recorder.updateIndicator(near: nil, action: nil)
+        }
+        view.evaluateJavaScript("document.querySelector('textarea').hidden = true", completionHandler: nil)
+        preview.captureStarted(in: view)
+        var action = MeetingRecorder.IndicatorAction.reopenWebsite
+        func refresh() {
+            recorder.updateIndicator(near: nil, action: action, offersPreview: true, preview: preview.presentation,
+                                     onWebsitePress: { _ = preview.toggle(in: view) })
+        }
+        preview.startWhileHidden(view, onChange: refresh)
+        refresh()
+        guard let content = NSApp.windows.compactMap({ $0.contentView as? RecordingIndicatorContent }).first,
+              let window = content.window, let dot = content.dotFrame else { return false }
+        guard recordingIndicatorRendersRed(content.ball) else {
+            print("Recording indicator did not render a red center and soft falloff")
+            return false
+        }
+        guard preview.presentation == nil, content.ball.accessibilityPerformPress(),
+              window.frame.width > dot.width, content.dotFrame == dot else {
+            print("Opening the transcript shifted the dot or failed to expand the window")
+            return false
+        }
+        preview.updateCaption("live spoken words")
+        guard preview.presentation == .init(text: "live spoken words", isExcerpt: true) else { return false }
+        preview.captureEnded(in: view)
+        action = .websiteTranscript
+        refresh()
+        guard content.window === window, window.frame.width > dot.width,
+              preview.presentation?.text == "live spoken words" else { return false }
+        view.evaluateJavaScript("""
+            const old = document.querySelector('textarea');
+            const field = old.cloneNode();
+            old.replaceWith(field);
+            field.hidden = false;
+            field.value = 'local spoken words draft';
+            """, completionHandler: nil)
+        func excerpt() -> String? { preview.presentation.flatMap { $0.isExcerpt ? $0.text : nil } }
+        guard wait({ excerpt() == "spoken words" }) else { return false }
+        guard content.ball.accessibilityPerformPress(), preview.presentation == nil, window.frame == dot,
+              content.ball.accessibilityPerformPress(), excerpt() == "spoken words", content.dotFrame == dot else { return false }
+        view.evaluateJavaScript("document.querySelector('textarea').value = 'replacement draft'", completionHandler: nil)
+        guard wait({ excerpt() == "live spoken words" }) else { return false }
+        view.evaluateJavaScript("document.querySelector('textarea').value = 'local draft another utterance'", completionHandler: nil)
+        guard wait({ excerpt() == "another utterance" }) else { return false }
+        preview.pause()
+        guard preview.presentation == nil, preview.canWatch(view) else { return false }
+        preview.clear(in: view)
+        guard !preview.canWatch(view) else { return false }
+        print("Audio and dictation preview checks passed")
+        return true
+    }
+
+    private static func recordingIndicatorRendersRed(_ ball: ActivityBall) -> Bool {
+        let size = Int(ActivityBall.recordingSize)
+        guard let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+              let layer = ball.layer, let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { return false }
+        layer.render(in: context)
+        let center = (size / 2 * size + size / 2) * 4
+        let glow = center + 8 * 4
+        let edge = center + 12 * 4
+        return bytes[center] > 180 && bytes[center + 1] < 100
+            && bytes[glow] > bytes[edge] && bytes[glow] > bytes[glow + 1]
+    }
+
+    private static func runAudioMixSelfTest(interleaved: Bool, systemAudible: Bool = true) -> Bool {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let sampleRate = 32_000.0
+        let frames: AVAudioFrameCount = 16_000
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                         channels: 2, interleaved: interleaved),
+              let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+              let channels = input.floatChannelData else { return false }
+        input.frameLength = frames
+        let frequencies = [440.0, 1_070.0]
+        for (channel, frequency) in frequencies.enumerated() {
+            for index in 0..<Int(frames) {
+                let gain = channel == 0 || systemAudible ? 0.2 : 0
+                let sample = Float(gain * sin(2 * .pi * frequency * Double(index) / sampleRate))
+                if interleaved { channels[0][index * 2 + channel] = sample }
+                else { channels[channel][index] = sample }
+            }
+        }
+        do {
+            let writer = try MixedAudioWriter(url: url, sampleRate: sampleRate, microphoneChannels: 1)
+            writer.write(input.audioBufferList)
+            let measured = writer.audioLevel
+            guard measured > (systemAudible ? 0.13 : 0.08),
+                  measured < (systemAudible ? 0.15 : 0.11), writer.audioLevel == 0 else {
+                writer.close()
+                return false
+            }
+            writer.close()
+            let file = try AVAudioFile(forReading: url)
+            guard !writer.failed, writer.heardSystemAudio == systemAudible, file.processingFormat.channelCount == 1,
+                  let output = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { return false }
+            try file.read(into: output)
+            guard let mixed = output.floatChannelData?[0], output.frameLength >= frames / 2 else { return false }
+            let length = Int(output.frameLength)
+            return frequencies.enumerated().allSatisfy { channel, frequency in
+                var sine = 0.0
+                var cosine = 0.0
+                for index in 0..<length {
+                    let phase = 2 * Double.pi * frequency * Double(index) / sampleRate
+                    sine += Double(mixed[index]) * sin(phase)
+                    cosine += Double(mixed[index]) * cos(phase)
+                }
+                let level = hypot(sine, cosine) / Double(length)
+                return channel == 0 || systemAudible ? level > 0.04 : level < 0.015
+            }
+        } catch {
+            print("Audio mix test failed: \(error)")
+            return false
+        }
+    }
+
+    private final class AudioRelayFixture: NSObject, WKScriptMessageHandlerWithReply {
+        var stopped = false
+        private var offset = 0
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage,
+                                   replyHandler: @escaping @MainActor (Any?, String?) -> Void) {
+            let body = message.body as? [String: String]
+            switch body?["action"] {
+            case "start":
+                replyHandler(["token": "fixture", "sampleRate": 48_000], nil)
+            case "pull" where body?["token"] == "fixture":
+                let samples = (offset..<(offset + 4560)).map { Float(sin(Double($0) * .pi / 50)) * 0.3 }
+                offset += 4560
+                replyHandler(samples.withUnsafeBytes { Data($0).base64EncodedString() }, nil)
+            case "stop" where body?["token"] == "fixture":
+                stopped = true
+                replyHandler(true, nil)
+            default:
+                replyHandler(nil, "Unexpected request")
+            }
+        }
+    }
+
+    private static func runWebsiteAudioSelfTest() -> Bool {
+        guard WebsiteAudioRelay.supports(URL(string: "https://chatgpt.com/c/fixture")),
+              WebsiteAudioRelay.supports(URL(string: "https://claude.ai/new")),
+              !WebsiteAudioRelay.supports(URL(string: "http://chatgpt.com/c/fixture")),
+              !WebsiteAudioRelay.supports(URL(string: "https://chatgpt.com:8080/c/fixture")),
+              nativeWebsiteCaptureDecision(.microphone, fromTrustedPage: true) == .deny,
+              nativeWebsiteCaptureDecision(.cameraAndMicrophone, fromTrustedPage: true) == .deny,
+              nativeWebsiteCaptureDecision(.camera, fromTrustedPage: false) == .deny,
+              nativeWebsiteCaptureDecision(.camera, fromTrustedPage: true) == .prompt else { return false }
+
+        let fixture = AudioRelayFixture()
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.mediaTypesRequiringUserActionForPlayback = .all
+        config.userContentController.addScriptMessageHandler(fixture, contentWorld: .page, name: WebsiteAudioRelay.handler)
+        let fixtureSetup = """
+            globalThis.floatChatWebsiteAudioEnabled = true;
+            globalThis.rawMicrophoneCalls = 0;
+            navigator.mediaDevices.getUserMedia = async () => {
+                globalThis.rawMicrophoneCalls++;
+                throw new Error('The real microphone should never be called');
+            };
+            """
+        config.userContentController.addUserScript(WKUserScript(source: fixtureSetup + WebsiteAudioRelay.script,
+                                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let view = WKWebView(frame: .zero, configuration: config)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 150),
+                            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.contentView = view
+        panel.makeKeyAndOrderFront(nil)
+        defer { panel.orderOut(nil) }
+        view.loadHTMLString("<button style='position:fixed;inset:0'>Local website microphone fixture</button>", baseURL: URL(string: "https://chatgpt.com/c/fixture"))
+        let loadDeadline = Date.now.addingTimeInterval(4)
+        while view.isLoading && Date.now < loadDeadline { RunLoop.current.run(until: Date.now.addingTimeInterval(0.04)) }
+        var result: Bool?
+        view.callAsyncJavaScript("""
+            const button = document.querySelector('button');
+            globalThis.fixturePhase = 'Waiting for click';
+            return await new Promise((resolve, reject) => {
+              button.addEventListener('click', () => run().then(resolve, reject), {once: true});
+            });
+            async function run() {
+            const context = new AudioContext();
+            const resumed = context.resume();
+            await new Promise(resolve => setTimeout(resolve, 200));
+            globalThis.fixturePhase = 'Getting microphone, activation: ' + navigator.userActivation.isActive;
+            const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+            await resumed;
+            globalThis.fixturePhase = 'Recording track';
+            const source = context.createMediaStreamSource(stream);
+            const analyser = context.createAnalyser();
+            const silent = context.createGain();
+            silent.gain.value = 0;
+            source.connect(analyser).connect(silent).connect(context.destination);
+            const recorder = new MediaRecorder(stream);
+            const recorded = new Promise(resolve => recorder.addEventListener('dataavailable', event => resolve(event.data.size), {once: true}));
+            recorder.start();
+            await new Promise(resolve => setTimeout(resolve, 550));
+            const samples = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(samples);
+            recorder.stop();
+            const size = await recorded;
+            stream.getTracks().forEach(track => track.stop());
+            await context.close();
+            globalThis.fixturePhase = 'Recorded ' + size + ' bytes, signal: ' + samples.some(sample => Math.abs(sample) > 0.05);
+            globalThis.floatChatWebsiteAudioEnabled = false;
+            let denied = false;
+            try { await navigator.mediaDevices.getUserMedia({audio: true}); }
+            catch (_) { denied = true; }
+            return denied && globalThis.rawMicrophoneCalls === 0 &&
+                size > 0 && samples.some(sample => Math.abs(sample) > 0.05);
+            }
+            """, arguments: [:], in: nil, in: .page) { answer in
+                switch answer {
+                case .success(let value): result = value as? Bool ?? false
+                case .failure(let error):
+                    print("Website audio fixture failed: \(error.localizedDescription)")
+                    result = false
+                }
+            }
+        RunLoop.current.run(until: Date.now.addingTimeInterval(0.20))
+        let point = NSPoint(x: 150, y: 60)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                                  windowNumber: panel.windowNumber, context: nil, eventNumber: 0,
+                                                  clickCount: 1, pressure: 1) else { return false }
+            panel.sendEvent(event)
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
+        }
+        let deadline = Date.now.addingTimeInterval(8)
+        while result == nil && Date.now < deadline { RunLoop.current.run(until: Date.now.addingTimeInterval(0.04)) }
+        RunLoop.current.run(until: Date.now.addingTimeInterval(0.15))
+        if result != true || !fixture.stopped {
+            var phase: String?
+            view.evaluateJavaScript("globalThis.fixturePhase ?? 'not started'") { value, _ in phase = value as? String }
+            let logDeadline = Date.now.addingTimeInterval(1)
+            while phase == nil && Date.now < logDeadline { RunLoop.current.run(until: Date.now.addingTimeInterval(0.04)) }
+            print("Website audio fixture: \(phase ?? "no response"), stop received: \(fixture.stopped)")
+        }
+        return result == true && fixture.stopped
+    }
+
+    private final class DictationTestPage: WKWebView {
+        private var simulatedCapture: WKMediaCaptureState = .none
+        override var microphoneCaptureState: WKMediaCaptureState { simulatedCapture }
+
+        func simulateCapture(_ state: WKMediaCaptureState) {
+            willChangeValue(forKey: "microphoneCaptureState")
+            simulatedCapture = state
+            didChangeValue(forKey: "microphoneCaptureState")
+        }
+
+        override func setMicrophoneCaptureState(_ state: WKMediaCaptureState, completionHandler: (@MainActor () -> Void)? = nil) {
+            simulateCapture(state)
+            completionHandler?()
+        }
+    }
+
     static func runPanelSelfTest() -> Bool {
         _ = NSApplication.shared
         let suite = "dev.quickchat.omni.panel-tests.\(UUID().uuidString)"
@@ -200,7 +490,7 @@ extension FloatChatController {
                     background-image: linear-gradient(transparent, rgb(17,17,17));
                   }
                 </style>
-                <div data-thread-scroll-footer="true" id="thread-bottom-container"
+                <div data-thread-scroll-footer=""
                      style="position:fixed;inset:auto 0 0;height:44px;pointer-events:none"></div>
                 """
             let encodedFooterPaint = String(decoding: try! JSONEncoder().encode(footerPaint), as: UTF8.self)
@@ -305,27 +595,71 @@ extension FloatChatController {
                 ("claude.ai", "class='ProseMirror' contenteditable='true'")
             ] {
                 original.loadHTMLString("""
-                    <main style="position:fixed;inset:0 32% 0 0">
-                      <div id="dock" style="position:absolute;inset:auto 0 0;height:125px">
+                    <style>
+                        #liveHeader::after, #card::before {
+                            content: ''; position: absolute; inset: 0; pointer-events: none;
+                            background: linear-gradient(#111,#222); box-shadow: 0 0 14px #000;
+                        }
+                        #card::after { content: 'Hint'; position: absolute; bottom: 0; right: 0; }
+                    </style>
+                    <header id="liveHeader" style="position:fixed;inset:8px 0 auto;height:40px;
+                        background:linear-gradient(#000,#111);box-shadow:0 10px 40px #000">
+                        <button style="background:rgb(44,45,46)">Conversation</button>
+                    </header>
+                    <main style="position:fixed;inset:0 32% 0 0;pointer-events:none">
+                      <article style="position:absolute;inset:70px 0 auto;height:100px;background:rgb(36,37,38)">
+                        <div style="background:rgb(26,27,28)">An answer with a card</div>
+                      </article>
+                      <div id="dock" style="position:absolute;inset:auto 0 0;height:125px;pointer-events:auto">
                         <div id="card" style="position:relative;width:100%;height:72px;border-radius:20px;background:rgb(50,55,60)">
                           <div \(editorAttributes)>Reply</div>
                         </div>
+                        <button>Attach</button><button>Send</button>
                       </div>
                     </main>
-                    """, baseURL: URL(string: "https://\(host)/new"))
+                    """, baseURL: URL(string: "https://\(host)/c/fixture"))
                 guard waitForValue("ready", in: original, script: "document.querySelector('#dock') ? 'ready' : ''"),
                       evaluate("""
                           const dock = document.querySelector('#dock');
-                          dock.insertAdjacentHTML('afterbegin', '<div id="new-band" aria-hidden="true" style="position:absolute;inset:0;pointer-events:none;backdrop-filter:blur(10px);background:linear-gradient(#181818,#222)"></div>');
+                          dock.insertAdjacentHTML('afterbegin', '<div><div><div id="new-band" aria-hidden="true" style="position:absolute;inset:0;pointer-events:none;backdrop-filter:blur(10px);box-shadow:0 0 0 12px #000;background:linear-gradient(#181818,#222)"></div></div></div>');
                           'shown'
                           """, in: original) == "shown" else { return false }
                 let paint = """
                     [getComputedStyle(document.querySelector('#new-band')).backgroundImage,
                      getComputedStyle(document.querySelector('#new-band')).backdropFilter,
+                     getComputedStyle(document.querySelector('#new-band')).boxShadow,
                      getComputedStyle(document.querySelector('#card')).backgroundColor,
                      getComputedStyle(document.querySelector('[contenteditable]')).opacity].join(':')
                     """
-                guard waitForValue("none:none:rgb(50, 55, 60):1", in: original, script: paint) else { return false }
+                guard waitForValue("none:none:none:rgb(50, 55, 60):1", in: original, script: paint) else { return false }
+                let generatedPaint = """
+                    [getComputedStyle(document.querySelector('#liveHeader')).backgroundImage,
+                     getComputedStyle(document.querySelector('#liveHeader'), '::after').backgroundImage,
+                     getComputedStyle(document.querySelector('#card'), '::before').backgroundImage,
+                     getComputedStyle(document.querySelector('#card'), '::after').content,
+                     getComputedStyle(document.querySelector('header button')).backgroundColor,
+                     getComputedStyle(document.querySelector('article')).backgroundColor].join(':')
+                    """
+                guard waitForValue("none:none:none:\"Hint\":rgb(44, 45, 46):rgb(36, 37, 38)",
+                                   in: original, script: generatedPaint) else { return false }
+                if host == "chatgpt.com" {
+                    let portal = """
+                        document.body.insertAdjacentHTML('beforeend',
+                            '<div aria-hidden="true" style="pointer-events:none"><div id="bottom-portal" style="position:fixed;left:18px;right:18px;bottom:-4px;height:23px;background:rgb(18,18,18)"></div></div>');
+                        'ready'
+                        """
+                    let portalColor = "getComputedStyle(document.querySelector('#bottom-portal')).backgroundColor"
+                    guard evaluate(portal, in: original) == "ready",
+                          waitForValue("rgba(0, 0, 0, 0)", in: original, script: portalColor) else { return false }
+                }
+                controller.setPanelTranslucency(0)
+                let restorePaint = """
+                    String(['#liveHeader', '#card'].every((selector, index) =>
+                        getComputedStyle(document.querySelector(selector), index ? '::before' : '::after')
+                            .backgroundImage.startsWith('linear-gradient(')))
+                    """
+                guard waitForValue("true", in: original, script: restorePaint) else { return false }
+                controller.setPanelTranslucency(32)
             }
             controller.setPanelTranslucency(0)
         }
@@ -443,6 +777,140 @@ extension FloatChatController {
         guard indicator.generatingKeys == ["pinned"], !indicator.isWatching(other) else { return false }
         indicator.stopWatching(draftView)
         guard indicator.generatingKeys.isEmpty else { return false }
+
+        print("Checking recording filenames and explicit upload picker navigation")
+        let recordings = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: recordings) }
+        do { try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: false) }
+        catch { return false }
+        let firstRecording = MeetingRecorder.recordingURL(in: recordings)
+        let anotherRecording = MeetingRecorder.recordingURL(in: recordings)
+        guard firstRecording != anotherRecording, firstRecording.pathExtension == "m4a",
+              firstRecording.deletingLastPathComponent().path == recordings.path else { return false }
+        do { try Data([0]).write(to: anotherRecording) } catch { return false }
+        let picker = NSOpenPanel()
+        let shortcut = RecordingPickerShortcut(picker: picker, directory: recordings)
+        picker.accessoryView = shortcut
+        shortcut.performClick(nil)
+        guard picker.directoryURL?.resolvingSymlinksInPath().path == recordings.resolvingSymlinksInPath().path,
+              picker.urls.isEmpty else { return false }
+
+        print("Checking an optional Downloads copy keeps existing files")
+        let downloads = recordings.appendingPathComponent("Downloads", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: false)
+            let existing = downloads.appendingPathComponent(anotherRecording.lastPathComponent)
+            try Data([1]).write(to: existing)
+            let copy = try Self.copyRecording(anotherRecording, to: downloads)
+            guard copy.path != existing.path, try Data(contentsOf: copy) == Data([0]),
+                  try Data(contentsOf: existing) == Data([1]),
+                  try Data(contentsOf: anotherRecording) == Data([0]) else { return false }
+        } catch { return false }
+
+        print("Checking automatic attachment to the original parked chat")
+        let receivingPage = WKWebView(frame: draftView.frame, configuration: config)
+        let receivingURL = URL(string: "https://chatgpt.com/c/recording-fixture")!
+        let key = controller.providers[controller.selectedIndex].key
+        let source = ChatRecording(key: key, view: receivingPage, url: receivingURL)
+        controller.webView = receivingPage
+        receivingPage.uiDelegate = controller
+        controller.recordingChat = source
+        stack.addArrangedSubview(receivingPage)
+        panel.orderFrontRegardless()
+        receivingPage.loadHTMLString("""
+            <form onsubmit="window.sent = true; return false">
+              <input type="file" accept="image/*">
+              <input id="audio" type="file" accept="audio/*">
+              <textarea id="prompt-textarea"></textarea>
+            </form>
+            <script>
+              document.querySelector('#audio').addEventListener('change', async event => {
+                window.receivedByte = new Uint8Array(await event.target.files[0].arrayBuffer())[0];
+              });
+            </script>
+            """, baseURL: receivingURL)
+        guard waitForValue("ready", in: receivingPage, script: "document.querySelector('#audio') ? 'ready' : ''"),
+              !source.matches(other, key: key), !source.matches(receivingPage, key: "a-different-tab") else { return false }
+        panel.orderOut(nil)
+        controller.parkActivePage()
+        guard controller.webView == nil, controller.parkedPages[key]?.view === receivingPage else { return false }
+        controller.recordingDidSave(anotherRecording, automaticallyAttach: true)
+        let handoff = "String(document.querySelector('#audio').files.length) + ':' + String(window.receivedByte) + ':' + String(window.sent === true) + ':' + document.querySelector('textarea').value"
+        guard waitForValue("1:0:false:" + AppText.t("Please transcribe this audio recording."), in: receivingPage, script: handoff),
+              !panel.isVisible, source.didHandOff, source.attachmentConfirmed else { return false }
+        controller.show()
+        guard controller.webView === receivingPage,
+              evaluate("history.replaceState({}, '', '/c/different'); 'changed'", in: receivingPage) == "changed",
+              !source.matches(receivingPage, key: key), source.didHandOff else { return false }
+
+        print("Checking unsupported audio pickers leave the recording available to save")
+        guard let currentURL = receivingPage.url,
+              evaluate("document.querySelector('#audio').remove(); 'ready'", in: receivingPage) == "ready" else { return false }
+        let unsupported = ChatRecording(key: key, view: receivingPage, url: currentURL)
+        controller.recordingChat = unsupported
+        controller.recordingDidSave(anotherRecording, automaticallyAttach: true)
+        let attachmentDeadline = Date.now.addingTimeInterval(3)
+        while !unsupported.attachmentFailed && Date.now < attachmentDeadline {
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
+        }
+        guard unsupported.attachmentFailed, !unsupported.attachmentConfirmed,
+              controller.lastRecordingFile == anotherRecording else { return false }
+
+        print("Checking temporary recordings expire without touching recent or unrelated files")
+        let stale = firstRecording
+        let unrelated = recordings.appendingPathComponent("Unrelated.m4a")
+        do {
+            try Data([0]).write(to: stale)
+            try Data([0]).write(to: unrelated)
+            let past = Date.now.addingTimeInterval(-MeetingRecorder.stagingLifetime - 60)
+            for file in [stale, unrelated] {
+                try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: file.path)
+            }
+            MeetingRecorder.removeExpiredStaging(in: recordings)
+            guard !FileManager.default.fileExists(atPath: stale.path),
+                  FileManager.default.fileExists(atPath: unrelated.path),
+                  FileManager.default.fileExists(atPath: anotherRecording.path) else { return false }
+        } catch { return false }
+
+        print("Checking website dictation survives the window’s minimize action")
+        controller.hide(restoreFocus: false)
+        let dictationPage = DictationTestPage(frame: draftView.frame, configuration: config)
+        controller.setRetention(10, forPinned: false)
+        controller.parkedPages[key] = ParkedPage(view: dictationPage, parkedAt: .now, isPinned: false)
+        controller.show()
+        guard controller.webView === dictationPage else { return false }
+        controller.setRetention(0, forPinned: false)
+        panel.onCancel = { [weak controller] in controller?.hide(restoreFocus: false) }
+        dictationPage.simulateCapture(.active)
+        guard let minimize = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                              timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                                              characters: "m", charactersIgnoringModifiers: "m", isARepeat: false, keyCode: 46),
+              panel.performKeyEquivalent(with: minimize) else { return false }
+        guard !panel.isVisible, controller.webView === dictationPage, dictationPage.window === panel,
+              dictationPage.microphoneCaptureState == .active, controller.meetingRecorder.isIndicatorVisible else { return false }
+        dictationPage.simulateCapture(.none)
+        guard controller.hiddenMicrophoneGrace != nil, !controller.meetingRecorder.isIndicatorVisible,
+              controller.webView === dictationPage else { return false }
+        controller.show()
+        guard panel.isVisible, controller.webView === dictationPage,
+              controller.hiddenMicrophoneGrace == nil else { return false }
+
+        print("Checking the recording overlay leaves the chat layout in place")
+        let canvas = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 560))
+        let page = NSView(frame: canvas.bounds)
+        canvas.addSubview(page)
+        let overlay = RecordingOverlay(target: NSApp, action: #selector(NSApplication.stop(_:)))
+        canvas.addSubview(overlay, positioned: .above, relativeTo: page)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 8),
+            overlay.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -10)
+        ])
+        guard overlay.isHidden else { return false }
+        overlay.display("Recording", recording: true, action: "Stop")
+        canvas.layoutSubtreeIfNeeded()
+        guard !overlay.isHidden, overlay.frame.width > 60, canvas.bounds.contains(overlay.frame), page.frame == canvas.bounds else { return false }
+        overlay.display(nil)
+        guard overlay.isHidden, page.frame == canvas.bounds else { return false }
 
         print("Checking frame recovery")
         panel.setFrameOrigin(NSPoint(x: 60_000, y: 60_000))

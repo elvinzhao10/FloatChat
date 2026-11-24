@@ -1,5 +1,12 @@
 # FloatChat version history
 
+## 0.4.0
+
+- Record your microphone and Mac playback, including audio routed through headphones. Recordings continue when you hide the window or switch chats, and supported ChatGPT composers receive the audio in the originating chat.
+- Use a website’s dictation button with the same two audio sources. On supported Macs running macOS 26 or later, the floating dot expands to show optional live, on-device captions while the chat is hidden.
+- Hide the chat with **⌘M** and keep the current dictation session running. The floating recording dot follows the audio level.
+- Refine window translucency across the ChatGPT and Claude composer and conversation layouts.
+
 ## 0.3.4
 
 - Keep page translucency through refreshes and conversation changes, including more ChatGPT and Claude composer layouts. Text and controls stay opaque.

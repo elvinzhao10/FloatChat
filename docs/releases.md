@@ -1,6 +1,6 @@
 # FloatChat distribution
 
-Local builds use `make app`. Run `swift test` with full Xcode for the headless XCTest target. `make check` also runs the Mac window and WebKit fixtures in a logged-in desktop session. GitHub Actions builds the app and runs XCTest on pushes and pull requests.
+Build with the macOS 26 SDK or later using `make app`. Run `swift test` with full Xcode for the headless XCTest target. `make check` also runs the Mac window and WebKit fixtures in a logged-in desktop session. GitHub Actions builds the app and runs XCTest on pushes and pull requests.
 
 ## Keep local builds signed with the same identity
 
